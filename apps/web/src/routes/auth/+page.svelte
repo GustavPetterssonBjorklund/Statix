@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
+  import { onMount } from "svelte";
   import { Card } from "$lib";
+  import { clearAuthToken, getAuthToken, setAuthToken, validateAuthToken } from "$lib/auth";
 
   type ApiResult = {
     status: number;
@@ -30,6 +33,23 @@
   let setPasswordToken = "";
   let setPasswordValue = "";
   let setPasswordResult = "";
+
+  onMount(async () => {
+    const token = getAuthToken();
+    if (!token) {
+      await goto("/login");
+      return;
+    }
+
+    const user = await validateAuthToken(token);
+    if (!user) {
+      clearAuthToken();
+      await goto("/login");
+      return;
+    }
+
+    bearerToken = token;
+  });
 
   async function apiRequest(path: string, method: "GET" | "POST", body?: Record<string, unknown>) {
     const headers: Record<string, string> = {};
@@ -105,6 +125,7 @@
       typeof (result.body as { token?: unknown }).token === "string"
     ) {
       bearerToken = (result.body as { token: string }).token;
+      setAuthToken(bearerToken);
     }
   }
 
@@ -116,6 +137,10 @@
   async function logout() {
     const result = await apiRequest("logout", "POST");
     logoutResult = formatResult("Logout", result);
+    if (result.status === 200) {
+      clearAuthToken();
+      await goto("/login");
+    }
   }
 
   async function createUser() {

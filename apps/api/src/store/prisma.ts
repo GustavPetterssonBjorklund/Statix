@@ -1,5 +1,6 @@
 import { Prisma, TokenType } from "@prisma/client";
 import { ulid } from "ulid";
+import type { MetricsPayload } from "@statix/shared";
 
 import { prisma } from "../lib/prisma.js";
 
@@ -8,19 +9,177 @@ export async function dbHealthcheck() {
 }
 
 export async function listNodes() {
-  return prisma.node.findMany({ orderBy: { createdAt: "desc" } });
+  const nodes = await prisma.node.findMany({
+    orderBy: { createdAt: "desc" },
+    include: {
+      metrics: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          createdAt: true,
+          ts: true,
+          cpu: true,
+          memUsed: true,
+          memTotal: true,
+          diskUsed: true,
+          diskTotal: true,
+          netRx: true,
+          netTx: true,
+        },
+      },
+      _count: {
+        select: { metrics: true },
+      },
+    },
+  });
+
+  return nodes.map((node) => ({
+    id: node.id,
+    name: node.name,
+    lastSeenAt: node.lastSeenAt,
+    createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
+    publishCount: node._count.metrics,
+    lastPublishAt: node.metrics[0]?.createdAt ?? null,
+    latestMetric: node.metrics[0]
+      ? {
+          at: node.metrics[0].createdAt,
+          ts: Number(node.metrics[0].ts),
+          cpu: node.metrics[0].cpu,
+          memUsed: Number(node.metrics[0].memUsed),
+          memTotal: Number(node.metrics[0].memTotal),
+          diskUsed: Number(node.metrics[0].diskUsed),
+          diskTotal: Number(node.metrics[0].diskTotal),
+          netRx: Number(node.metrics[0].netRx),
+          netTx: Number(node.metrics[0].netTx),
+        }
+      : null,
+  }));
 }
 
-export async function createNode(name: string) {
+export async function createNode(changeset: { name?: string; authTokenHash: string }) {
   return prisma.node.create({
     data: {
       id: ulid(),
-      name,
+      name: changeset.name ?? null,
+      authTokenHash: changeset.authTokenHash,
     },
   });
 }
 
+export namespace NodeStore {
+  export async function findById(nodeId: string) {
+    return prisma.node.findUnique({
+      where: { id: nodeId },
+    });
+  }
+
+  export async function rotateMqttCredentials(changeset: {
+    nodeId: string;
+    username: string;
+    passwordHash: string;
+    passwordExpiresAt: Date;
+  }) {
+    return prisma.node.update({
+      where: { id: changeset.nodeId },
+      data: {
+        mqttUsername: changeset.username,
+        mqttPasswordHash: changeset.passwordHash,
+        mqttPasswordExpiresAt: changeset.passwordExpiresAt,
+      },
+      select: {
+        id: true,
+        mqttUsername: true,
+        mqttPasswordExpiresAt: true,
+      },
+    });
+  }
+
+  export async function touchLastSeen(nodeId: string, at: Date) {
+    return prisma.node.update({
+      where: { id: nodeId },
+      data: {
+        lastSeenAt: at,
+      },
+      select: { id: true },
+    });
+  }
+}
+
+function toBigInt(value: number) {
+  if (!Number.isFinite(value) || value < 0) {
+    return BigInt(0);
+  }
+  return BigInt(Math.trunc(value));
+}
+
+export namespace MetricStore {
+  export async function appendNodeMetric(nodeId: string, payload: MetricsPayload) {
+    const tsValue = toBigInt(payload.ts);
+    const observedAt = new Date(Number(tsValue));
+
+    return prisma.$transaction([
+      prisma.metric.create({
+        data: {
+          nodeId,
+          ts: tsValue,
+          cpu: payload.cpu,
+          memUsed: toBigInt(payload.mem_used),
+          memTotal: toBigInt(payload.mem_total),
+          diskUsed: toBigInt(payload.disk_used),
+          diskTotal: toBigInt(payload.disk_total),
+          netRx: toBigInt(payload.net_rx),
+          netTx: toBigInt(payload.net_tx),
+        },
+      }),
+      prisma.node.update({
+        where: { id: nodeId },
+        data: {
+          lastSeenAt: observedAt,
+        },
+      }),
+    ]);
+  }
+}
+
 export namespace UserStore {
+  export async function hasCredentialedAdmin() {
+    const adminUser = await prisma.user.findFirst({
+      where: {
+        passwordHash: { not: null },
+        roles: {
+          some: {
+            role: {
+              name: "admin",
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    return adminUser !== null;
+  }
+
+  export async function hasCredentialedAdminExcludingEmail(emailNormalized: string) {
+    const adminUser = await prisma.user.findFirst({
+      where: {
+        emailNormalized: { not: emailNormalized },
+        passwordHash: { not: null },
+        roles: {
+          some: {
+            role: {
+              name: "admin",
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    return adminUser !== null;
+  }
+
   export async function countUsers() {
     return prisma.user.count();
   }
@@ -138,6 +297,12 @@ export namespace UserStore {
         lastLoginAt: new Date(),
         lastLoginIp: ip ?? null,
       },
+    });
+  }
+
+  export async function deleteById(userId: string) {
+    return prisma.user.delete({
+      where: { id: userId },
     });
   }
 }

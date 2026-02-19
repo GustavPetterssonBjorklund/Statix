@@ -15,6 +15,15 @@ namespace Config {
             BYTE_LENGTH: 32,
             EXPIRES_IN: 60 * 60 * 1000, // 1 hour
         };
+
+        export const NODE_TOKEN = {
+            BYTE_LENGTH: 32,
+        };
+
+        export const NODE_MQTT_PASSWORD = {
+            BYTE_LENGTH: 24,
+            EXPIRES_IN: 24 * 60 * 60 * 1000, // 24 hours
+        };
     }
 
     export namespace Sessions {
@@ -63,6 +72,19 @@ export namespace Passwords {
 
     export async function hashToken(token: string): Promise<string> {
         return createHash("sha256").update(token).digest("hex");
+    }
+
+    export async function createNodeToken(): Promise<{ token: string; tokenHash: string }> {
+        const token = randomBytes(Config.Passwords.NODE_TOKEN.BYTE_LENGTH).toString("base64url");
+        const tokenHash = await hashToken(token);
+        return { token, tokenHash };
+    }
+
+    export async function createNodeMqttPassword(): Promise<{ password: string; passwordHash: string; expiresAt: Date }> {
+        const password = randomBytes(Config.Passwords.NODE_MQTT_PASSWORD.BYTE_LENGTH).toString("base64url");
+        const passwordHash = await hashToken(password);
+        const expiresAt = new Date(Date.now() + Config.Passwords.NODE_MQTT_PASSWORD.EXPIRES_IN);
+        return { password, passwordHash, expiresAt };
     }
 
     export async function createTemporaryPassword(): Promise<string> {

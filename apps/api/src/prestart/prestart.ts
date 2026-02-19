@@ -5,6 +5,17 @@ const BOOTSTRAP_EMAIL = "bootstrap-admin@example.com";
 
 export async function runPrestart() {
   const emailNormalized = BOOTSTRAP_EMAIL.toLowerCase();
+
+  const hasExistingAdmin = await UserStore.hasCredentialedAdminExcludingEmail(emailNormalized);
+  if (hasExistingAdmin) {
+    const bootstrapUser = await UserStore.findByEmail(emailNormalized);
+    if (bootstrapUser) {
+      await UserStore.deleteById(bootstrapUser.id);
+      console.log("[bootstrap] Removed bootstrap admin shell account because an admin user already exists.");
+    }
+    return;
+  }
+
   let adminUser = await UserStore.findByEmail(emailNormalized);
   if (!adminUser) {
     const createdAdmin = await UserStore.createShellUser({

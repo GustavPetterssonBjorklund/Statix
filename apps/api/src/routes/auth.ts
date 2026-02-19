@@ -39,8 +39,8 @@ function parseEmail(email: unknown) {
 
 const authRoutes: FastifyPluginAsync = async (app) => {
   app.get("/auth/bootstrap/status", async () => {
-    const users = await UserStore.countUsers();
-    return { needsBootstrap: users === 0 };
+    const hasCredentialedAdmin = await UserStore.hasCredentialedAdmin();
+    return { needsBootstrap: !hasCredentialedAdmin };
   });
 
   app.post("/auth/bootstrap/claim", async (request, reply) => {

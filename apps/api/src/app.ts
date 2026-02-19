@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import healthRoutes from "./routes/health.js";
 import nodeRoutes from "./routes/nodes.js";
 import authRoutes from "./routes/auth.js";
+import { startMqttIngest } from "./ingest/mqtt.js";
 
 const app = Fastify({ logger: true });
 const port = Number(process.env.PORT ?? 3001);
@@ -23,6 +24,7 @@ await app.register(authRoutes);
 
 const start = async () => {
   try {
+    startMqttIngest();
     await app.listen({ port, host });
   } catch (error) {
     app.log.error(error);

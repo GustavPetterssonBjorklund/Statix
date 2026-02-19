@@ -9,6 +9,7 @@
     "prisma:generate": "dotenv -e ../../.env -- prisma generate --schema ./prisma/schema.prisma",
     "prisma:migrate": "dotenv -e ../../.env -- prisma migrate dev --schema ./prisma/schema.prisma",
     "prisma:migrate:reset": "dotenv -e ../../.env -- prisma migrate reset --schema ./prisma/schema.prisma",
+    "prisma:seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "prisma:studio": "dotenv -e ../../.env -- prisma studio --schema ./prisma/schema.prisma"
   },
   "dependencies": {

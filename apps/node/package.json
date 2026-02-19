@@ -1,0 +1,19 @@
+{
+  "name": "@statix/node",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "dotenv -e ./.env -- tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@statix/shared": "workspace:*",
+    "mqtt": "^5.10.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.0"
+  }
+}
