@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Metric {
+  id        BigInt   @id @default(autoincrement())
+  createdAt DateTime @default(now()) @map("created_at")
+  ts        BigInt
+  cpu       Float
+  memUsed   BigInt   @map("mem_used")
+  memTotal  BigInt   @map("mem_total")
+  diskUsed  BigInt   @map("disk_used")
+  diskTotal BigInt   @map("disk_total")
+  netRx     BigInt   @map("net_rx")
+  netTx     BigInt   @map("net_tx")
+
+  @@map("metrics")
+}
