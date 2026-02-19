@@ -7,6 +7,189 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum TokenType {
+	VERIFY_EMAIL
+	RESET_PASSWORD
+	CHANGE_EMAIL
+}
+
+enum AuditAction {
+	USER_CREATED
+	LOGIN_SUCCESS
+	LOGIN_FAILED
+	LOGOUT
+	PASSWORD_CHANGED
+	EMAIL_VERIFIED
+	ROLE_CHANGED
+}
+
+model Permission {
+	id			    String	@id @default(cuid())
+	// Example: "project:read", "user:delete"
+	code		    String	@unique
+	description	String?
+
+	roles		    RolePermission[]
+
+	createdAt 	DateTime @default(now())
+	updatedAt 	DateTime @updatedAt
+}
+
+model Role {
+	id			    String	@id @default(cuid())
+	name		    String	@unique
+	description	String?
+
+	users		    UserRole[]
+	permissions	RolePermission[]
+
+	createdAt	  DateTime @default(now())
+	updatedAt	  DateTime @updatedAt
+}
+
+model RolePermission {
+	roleId			  String
+	permissionId	String
+
+	role			    Role		   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+	permission		Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+	createdAt		  DateTime @default(now())
+
+	@@id([roleId, permissionId])
+	@@index([permissionId])
+}
+
+model UserRole {
+	userId	    String
+	roleId	    String
+
+	user	    User @relation(fields: [userId], references: [id], onDelete: Cascade)
+	role	    Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+	createdAt   DateTime @default(now())
+
+	@@id([userId, roleId])
+	@@index([roleId])
+}
+
+model User {
+	id				String	@id @default(cuid())
+
+	email			String	@unique
+	emailNormalized	String	@unique
+	emailVerifiedAt	DateTime?
+
+	// Null if user created via OAuth-only (optional, but recommended)
+	passwordHash	String?
+
+	// Account state
+	isDisabled		Boolean	@default(false)
+	disabledAt		DateTime?
+	disabledReason	String?
+
+	// Brute-force mitigation / lockout
+	failedLoginCount	Int		@default(0)
+	lockedUntil			DateTime?
+	lastLoginAt			DateTime?
+	lastLoginIp			String?
+
+	// Optional profile
+	displayName		String?
+	avatarUrl		String?
+
+	roles			UserRole[]
+	sessions		Session[]
+	tokens			AuthToken[]
+	auditLogs		AuditLog[]
+
+	createdAt		DateTime @default(now())
+	updatedAt		DateTime @updatedAt
+
+	@@index([email])
+	@@index([emailNormalized])
+	@@index([lockedUntil])
+}
+
+model Session {
+	id			String	@id @default(cuid())
+
+	userId		String
+	user		User	@relation(fields: [userId], references: [id], onDelete: Cascade)
+
+	// Store a hash of the session token (never store the raw cookie token)
+	tokenHash	String	@unique
+
+	createdAt	DateTime @default(now())
+	updatedAt	DateTime @updatedAt
+
+	expiresAt	DateTime
+	revokedAt	DateTime?
+	lastSeenAt	DateTime?
+
+	// Optional security telemetry
+	ip			String?
+	userAgent	String?
+	deviceName	String?
+
+	@@index([userId])
+	@@index([expiresAt])
+	@@index([revokedAt])
+}
+
+model AuthToken {
+	id			String	@id @default(cuid())
+
+	userId		String
+	user		User	@relation(fields: [userId], references: [id], onDelete: Cascade)
+
+	type		TokenType
+
+	// Store hash of token; raw token only shown once to user via email link
+	tokenHash	String	@unique
+
+	expiresAt	DateTime
+	consumedAt	DateTime?
+
+	// Optional: for change-email flows
+	metadata	Json?
+
+	createdAt	DateTime @default(now())
+	updatedAt	DateTime @updatedAt
+
+	@@index([userId, type])
+	@@index([expiresAt])
+	@@index([consumedAt])
+}
+
+model AuditLog {
+	id			String	@id @default(cuid())
+
+	userId		String?
+	user		User?	@relation(fields: [userId], references: [id], onDelete: SetNull)
+
+	action		AuditAction
+	ip			String?
+	userAgent	String?
+	details		Json?
+
+	createdAt	DateTime @default(now())
+
+	@@index([userId])
+	@@index([action])
+	@@index([createdAt])
+}
+
+model Node {
+  id         String   @id // ULID
+  name       String?
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  metrics    Metric[]
+}
+
 model Metric {
   id        BigInt   @id @default(autoincrement())
   createdAt DateTime @default(now()) @map("created_at")
@@ -19,5 +202,9 @@ model Metric {
   netRx     BigInt   @map("net_rx")
   netTx     BigInt   @map("net_tx")
 
+  nodeId    String
+  node      Node     @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@index([nodeId, ts])
   @@map("metrics")
 }

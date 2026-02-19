@@ -1,4 +1,30 @@
-# Builder
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY . .
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: statix
+      POSTGRES_USER: statix
+      POSTGRES_PASSWORD: statix
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U statix -d statix"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+volumes:
+  pg_data:
+  mosquitto_data:
+  mosquitto_log:

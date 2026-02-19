@@ -3,9 +3,13 @@
   "private": true,
   "packageManager": "pnpm@10.29.3",
   "scripts": {
-    "dev": "pnpm -r dev",
+    "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "prisma:generate": "pnpm --filter @statix/api run prisma:generate",
+    "prisma:migrate:reset": "pnpm --filter @statix/api run prisma:migrate:reset",
+    "prisma:migrate": "pnpm --filter @statix/api run prisma:migrate",
+    "prisma:studio": "pnpm --filter @statix/api run prisma:studio"
   }
 }
