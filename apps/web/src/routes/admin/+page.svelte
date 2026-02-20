@@ -4,6 +4,7 @@
 	import { Card, NavDrawer } from "$lib";
 	import { clearAuthToken, getAuthToken, validateAuthToken } from "$lib/auth";
 	import { drawerLinks, drawerTitles } from "$lib/config/drawer";
+	import { connectLiveNodes } from "$lib/live-nodes";
 
 	type AuthUser = {
 		id: string;
@@ -42,52 +43,69 @@
 		return { response, data };
 	}
 
-	onMount(async () => {
-		const token = getAuthToken();
-		if (!token) {
-			await goto("/login");
-			return;
-		}
-		authToken = token;
+	onMount(() => {
+		let stopLiveNodes = () => {};
 
-		const authUser = await validateAuthToken(token);
-		if (!authUser) {
-			clearAuthToken();
-			await goto("/login");
-			return;
-		}
-
-		user = authUser as AuthUser;
-		if (!user.roles.includes("admin")) {
-			await goto("/dashboard");
-			return;
-		}
-
-		try {
-			const [nodesResult, bootstrapResult] = await Promise.all([
-				fetchJson("/api/nodes"),
-				fetchJson("/api/auth/bootstrap/status")
-			]);
-
-			if (!nodesResult.response.ok) {
-				errorMessage = "Failed to load nodes";
+		void (async () => {
+			const token = getAuthToken();
+			if (!token) {
+				await goto("/login");
 				return;
 			}
-			if (!bootstrapResult.response.ok) {
-				errorMessage = "Failed to load bootstrap status";
+			authToken = token;
+
+			const authUser = await validateAuthToken(token);
+			if (!authUser) {
+				clearAuthToken();
+				await goto("/login");
 				return;
 			}
 
-			nodes = Array.isArray(nodesResult.data) ? nodesResult.data : [];
-			needsBootstrap =
-				typeof bootstrapResult.data?.needsBootstrap === "boolean"
-					? bootstrapResult.data.needsBootstrap
-					: false;
-		} catch {
-			errorMessage = "Unable to load admin stats";
-		} finally {
-			loading = false;
-		}
+			user = authUser as AuthUser;
+			if (!user.roles.includes("admin")) {
+				await goto("/dashboard");
+				return;
+			}
+
+			try {
+				const [nodesResult, bootstrapResult] = await Promise.all([
+					fetchJson("/api/nodes"),
+					fetchJson("/api/auth/bootstrap/status")
+				]);
+
+				if (!nodesResult.response.ok) {
+					errorMessage = "Failed to load nodes";
+					return;
+				}
+				if (!bootstrapResult.response.ok) {
+					errorMessage = "Failed to load bootstrap status";
+					return;
+				}
+
+				nodes = Array.isArray(nodesResult.data) ? nodesResult.data : [];
+				needsBootstrap =
+					typeof bootstrapResult.data?.needsBootstrap === "boolean"
+						? bootstrapResult.data.needsBootstrap
+						: false;
+			} catch {
+				errorMessage = "Unable to load admin stats";
+			} finally {
+				loading = false;
+			}
+
+			stopLiveNodes = connectLiveNodes<NodeDto>(
+				(liveNodes) => {
+					nodes = liveNodes;
+				},
+				(error) => {
+					errorMessage = error;
+				}
+			);
+		})();
+
+		return () => {
+			stopLiveNodes();
+		};
 	});
 
 	async function createNodeToken() {

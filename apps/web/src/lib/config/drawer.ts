@@ -1,10 +1,9 @@
-import type { ComponentType } from "svelte";
 import { CircleGauge, KeyRound, LogIn, Shield } from "lucide-svelte";
 
 export type DrawerLink = {
 	label: string;
 	href: string;
-	icon: ComponentType;
+	icon: typeof CircleGauge | typeof Shield | typeof KeyRound | typeof LogIn;
 };
 
 export const drawerLinks: DrawerLink[] = [

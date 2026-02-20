@@ -3,6 +3,7 @@ import { ulid } from "ulid";
 import type { MetricsPayload } from "@statix/shared";
 
 import { prisma } from "../lib/prisma.js";
+import { markNodesChanged } from "../realtime/nodes.js";
 
 export async function dbHealthcheck() {
   await prisma.$queryRaw`SELECT 1`;
@@ -118,7 +119,7 @@ export namespace MetricStore {
     const tsValue = toBigInt(payload.ts);
     const observedAt = new Date(Number(tsValue));
 
-    return prisma.$transaction([
+    const result = await prisma.$transaction([
       prisma.metric.create({
         data: {
           nodeId,
@@ -139,6 +140,9 @@ export namespace MetricStore {
         },
       }),
     ]);
+
+    markNodesChanged();
+    return result;
   }
 }
 

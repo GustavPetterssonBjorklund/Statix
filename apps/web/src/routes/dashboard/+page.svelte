@@ -4,6 +4,7 @@
 	import { Card, NavDrawer } from "$lib";
 	import { clearAuthToken, getAuthToken, validateAuthToken } from "$lib/auth";
 	import { drawerLinks, drawerTitles } from "$lib/config/drawer";
+	import { connectLiveNodes } from "$lib/live-nodes";
 
 	type AuthUser = {
 		id: string;
@@ -155,37 +156,54 @@
 	$: selectedNodeLastPublishMs = selectedNode ? toMillis(selectedNode.lastPublishAt) : null;
 	$: selectedNodeStatus = selectedNode ? (isNodeActive(selectedNode) ? "Active" : "Idle") : "n/a";
 
-	onMount(async () => {
-		const token = getAuthToken();
-		if (!token) {
-			await goto("/login");
-			return;
-		}
+	onMount(() => {
+		let stopLiveNodes = () => {};
 
-		const user = await validateAuthToken(token);
-		if (!user) {
-			clearAuthToken();
-			await goto("/login");
-			return;
-		}
-		currentUser = user as AuthUser;
-		isAdmin = currentUser.roles.includes("admin");
-
-		try {
-			const response = await fetch("/api/nodes");
-			const data = await response.json();
-
-			if (!response.ok) {
-				errorMessage = data?.error ?? "Failed to load nodes";
+		void (async () => {
+			const token = getAuthToken();
+			if (!token) {
+				await goto("/login");
 				return;
 			}
 
-			nodes = Array.isArray(data) ? data : [];
-		} catch {
-			errorMessage = "Unable to load nodes";
-		} finally {
-			isLoading = false;
-		}
+			const user = await validateAuthToken(token);
+			if (!user) {
+				clearAuthToken();
+				await goto("/login");
+				return;
+			}
+			currentUser = user as AuthUser;
+			isAdmin = currentUser.roles.includes("admin");
+
+			try {
+				const response = await fetch("/api/nodes");
+				const data = await response.json();
+
+				if (!response.ok) {
+					errorMessage = data?.error ?? "Failed to load nodes";
+					return;
+				}
+
+				nodes = Array.isArray(data) ? data : [];
+			} catch {
+				errorMessage = "Unable to load nodes";
+			} finally {
+				isLoading = false;
+			}
+
+			stopLiveNodes = connectLiveNodes<NodeDto>(
+				(liveNodes) => {
+					nodes = liveNodes;
+				},
+				(error) => {
+					errorMessage = error;
+				}
+			);
+		})();
+
+		return () => {
+			stopLiveNodes();
+		};
 	});
 </script>
 

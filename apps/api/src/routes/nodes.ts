@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { Passwords } from "../user/auth.js";
 import { NodeStore, SessionStore, createNode, listNodes } from "../store/prisma.js";
+import { markNodesChanged } from "../realtime/nodes.js";
 
 function readBearerToken(rawHeader?: string) {
   if (!rawHeader) {
@@ -49,6 +50,7 @@ const nodeRoutes: FastifyPluginAsync = async (app) => {
       name: name.trim(),
       authTokenHash: nodeToken.tokenHash,
     });
+    markNodesChanged();
     const envFile = [
       `NODE_ID=${createdNode.id}`,
       `NODE_TOKEN=${nodeToken.token}`,
