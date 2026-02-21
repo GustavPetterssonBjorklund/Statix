@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { Passwords } from "../user/auth.js";
-import { NodeStore, SessionStore, createNode, listNodes } from "../store/prisma.js";
+import { MetricStore, NodeStore, SessionStore, createNode, listNodes } from "../store/prisma.js";
 import { markNodesChanged } from "../realtime/nodes.js";
 
 function readBearerToken(rawHeader?: string) {
@@ -20,6 +20,22 @@ const nodeRoutes: FastifyPluginAsync = async (app) => {
   app.get("/nodes", async () => {
     const nodes = await listNodes();
     return nodes;
+  });
+
+  app.get("/nodes/:nodeId/metrics", async (request, reply) => {
+    const params = request.params as { nodeId?: string } | undefined;
+    const nodeId = params?.nodeId;
+    if (!nodeId) {
+      return reply.status(400).send({ error: "nodeId is required" });
+    }
+
+    const query = request.query as { limit?: unknown } | undefined;
+    const parsedLimit =
+      typeof query?.limit === "string" ? Number(query.limit) : typeof query?.limit === "number" ? query.limit : 60;
+    const limit = Number.isFinite(parsedLimit) ? parsedLimit : 60;
+
+    const metrics = await MetricStore.listRecentByNode(nodeId, limit);
+    return { nodeId, metrics };
   });
 
   app.post("/nodes/create", async (request, reply) => {

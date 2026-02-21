@@ -144,6 +144,40 @@ export namespace MetricStore {
     markNodesChanged();
     return result;
   }
+
+  export async function listRecentByNode(nodeId: string, limit = 60) {
+    const safeLimit = Math.max(1, Math.min(300, Math.trunc(limit)));
+    const rows = await prisma.metric.findMany({
+      where: { nodeId },
+      orderBy: { createdAt: "desc" },
+      take: safeLimit,
+      select: {
+        createdAt: true,
+        ts: true,
+        cpu: true,
+        memUsed: true,
+        memTotal: true,
+        diskUsed: true,
+        diskTotal: true,
+        netRx: true,
+        netTx: true,
+      },
+    });
+
+    return rows
+      .reverse()
+      .map((row) => ({
+        at: row.createdAt,
+        ts: Number(row.ts),
+        cpu: row.cpu,
+        memUsed: Number(row.memUsed),
+        memTotal: Number(row.memTotal),
+        diskUsed: Number(row.diskUsed),
+        diskTotal: Number(row.diskTotal),
+        netRx: Number(row.netRx),
+        netTx: Number(row.netTx),
+      }));
+  }
 }
 
 export namespace UserStore {

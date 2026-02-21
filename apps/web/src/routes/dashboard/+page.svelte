@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
-	import { Card, NavDrawer } from "$lib";
+	import { scaleLinear, scaleTime } from "d3-scale";
+	import { curveMonotoneX, line } from "d3-shape";
+	import { NavDrawer } from "$lib";
 	import { clearAuthToken, getAuthToken, validateAuthToken } from "$lib/auth";
 	import { drawerLinks, drawerTitles } from "$lib/config/drawer";
 	import { connectLiveNodes } from "$lib/live-nodes";
@@ -34,13 +36,27 @@
 		} | null;
 	};
 
+	type NodeMetricPoint = {
+		at: string;
+		ts: number;
+		cpu: number;
+		memUsed: number;
+		memTotal: number;
+		diskUsed: number;
+		diskTotal: number;
+		netRx: number;
+		netTx: number;
+	};
+
 	let nodes: NodeDto[] = [];
 	let isLoading = true;
 	let errorMessage = "";
 	let currentUser: AuthUser | null = null;
-	let isAdmin = false;
 	let selectedNodeId = "";
+	let selectedNodeHistory: NodeMetricPoint[] = [];
 	const ACTIVE_WINDOW_MS = 2 * 60 * 1000;
+	const CHART_WIDTH = 760;
+	const CHART_HEIGHT = 220;
 
 	function toMillis(value?: string | null) {
 		if (!value) {
@@ -111,9 +127,92 @@
 		return Math.max(0, Math.min(100, (part / total) * 100));
 	}
 
-	function dialStyle(percent: number, color: string) {
-		const normalized = Math.max(0, Math.min(100, percent));
-		return `background: conic-gradient(${color} 0deg ${normalized * 3.6}deg, #e4e4e7 ${normalized * 3.6}deg 360deg);`;
+	type LineChart = {
+		path: string;
+		xTicks: Array<{ x: number; label: string }>;
+		yTicks: Array<{ y: number; label: string }>;
+		plotTop: number;
+		plotBottom: number;
+		plotLeft: number;
+		plotRight: number;
+	};
+
+	function buildLineChart(values: number[], timestamps: number[], width: number, height: number): LineChart {
+		const margin = {
+			top: 12,
+			right: 10,
+			bottom: 34,
+			left: 42,
+		};
+		const plotWidth = Math.max(1, width - margin.left - margin.right);
+		const plotHeight = Math.max(1, height - margin.top - margin.bottom);
+
+		if (values.length === 0) {
+			return {
+				path: "",
+				xTicks: [],
+				yTicks: [],
+				plotTop: margin.top,
+				plotBottom: margin.top + plotHeight,
+				plotLeft: margin.left,
+				plotRight: margin.left + plotWidth,
+			};
+		}
+
+		let seriesValues = values;
+		let seriesTimes = timestamps;
+		if (seriesValues.length === 1) {
+			seriesValues = [seriesValues[0], seriesValues[0]];
+			const t = seriesTimes[0] ?? Date.now();
+			seriesTimes = [t - 1000, t];
+		}
+
+		const minTime = Math.min(...seriesTimes);
+		const maxTime = Math.max(...seriesTimes);
+		const paddedMaxTime = maxTime === minTime ? maxTime + 1000 : maxTime;
+
+		const xScale = scaleTime()
+			.domain([new Date(minTime), new Date(paddedMaxTime)])
+			.range([margin.left, margin.left + plotWidth]);
+		const yScale = scaleLinear()
+			.domain([Math.min(...seriesValues), Math.max(...seriesValues)])
+			.range([margin.top + plotHeight, margin.top])
+			.nice();
+
+		const generator = line<number>()
+			.x((_: number, index: number) => xScale(new Date(seriesTimes[index] ?? paddedMaxTime)))
+			.y((value: number) => yScale(value))
+			.curve(curveMonotoneX);
+
+		const yTicks = yScale.ticks(5).map((tick) => ({
+			y: yScale(tick),
+			label: tick.toFixed(0),
+		}));
+		const xTicks = xScale.ticks(5).map((tick) => ({
+			x: xScale(tick),
+			label: tick.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+		}));
+
+		return {
+			path: generator(seriesValues) ?? "",
+			xTicks,
+			yTicks,
+			plotTop: margin.top,
+			plotBottom: margin.top + plotHeight,
+			plotLeft: margin.left,
+			plotRight: margin.left + plotWidth,
+		};
+	}
+
+	function summarizeSeries(values: number[]) {
+		if (values.length === 0) {
+			return { min: 0, max: 0, avg: 0 };
+		}
+
+		const min = Math.min(...values);
+		const max = Math.max(...values);
+		const avg = values.reduce((total, value) => total + value, 0) / values.length;
+		return { min, max, avg };
 	}
 
 	function isNodeActive(node: NodeDto) {
@@ -138,13 +237,6 @@
 		}
 		return latest;
 	}, null);
-	$: topPublisher = nodes.reduce<NodeDto | null>((top, node) => {
-		if (!top || (node.publishCount ?? 0) > (top.publishCount ?? 0)) {
-			return node;
-		}
-		return top;
-	}, null);
-	$: rankedNodes = [...nodes].sort((a, b) => (b.publishCount ?? 0) - (a.publishCount ?? 0)).slice(0, 5);
 	$: {
 		if (nodes.length === 0) {
 			selectedNodeId = "";
@@ -155,9 +247,38 @@
 	$: selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
 	$: selectedNodeLastPublishMs = selectedNode ? toMillis(selectedNode.lastPublishAt) : null;
 	$: selectedNodeStatus = selectedNode ? (isNodeActive(selectedNode) ? "Active" : "Idle") : "n/a";
+	$: cpuSeries = selectedNodeHistory.map((point) => point.cpu * 100);
+	$: memSeries = selectedNodeHistory.map((point) => percentValue(point.memUsed, point.memTotal));
+	$: diskSeries = selectedNodeHistory.map((point) => percentValue(point.diskUsed, point.diskTotal));
+	$: timeSeries = selectedNodeHistory.map((point) => point.ts);
+	$: cpuChart = buildLineChart(cpuSeries, timeSeries, CHART_WIDTH, CHART_HEIGHT);
+	$: memChart = buildLineChart(memSeries, timeSeries, CHART_WIDTH, CHART_HEIGHT);
+	$: diskChart = buildLineChart(diskSeries, timeSeries, CHART_WIDTH, CHART_HEIGHT);
+	$: cpuSummary = summarizeSeries(cpuSeries);
+	$: memSummary = summarizeSeries(memSeries);
+	$: diskSummary = summarizeSeries(diskSeries);
+
+	async function loadSelectedNodeHistory() {
+		if (!selectedNodeId) {
+			selectedNodeHistory = [];
+			return;
+		}
+
+		try {
+			const response = await fetch(`/api/nodes/${selectedNodeId}/metrics?limit=60`);
+			const data = await response.json();
+			if (!response.ok) {
+				return;
+			}
+			selectedNodeHistory = Array.isArray(data?.metrics) ? data.metrics : [];
+		} catch {
+			// keep previous history on transient errors
+		}
+	}
 
 	onMount(() => {
 		let stopLiveNodes = () => {};
+		let historyPollTimer: ReturnType<typeof setInterval> | null = null;
 
 		void (async () => {
 			const token = getAuthToken();
@@ -173,7 +294,6 @@
 				return;
 			}
 			currentUser = user as AuthUser;
-			isAdmin = currentUser.roles.includes("admin");
 
 			try {
 				const response = await fetch("/api/nodes");
@@ -199,116 +319,72 @@
 					errorMessage = error;
 				}
 			);
+
+			await loadSelectedNodeHistory();
+			historyPollTimer = setInterval(() => {
+				void loadSelectedNodeHistory();
+			}, 5000);
 		})();
 
 		return () => {
 			stopLiveNodes();
+			if (historyPollTimer) {
+				clearInterval(historyPollTimer);
+			}
 		};
 	});
+
+	$: if (selectedNodeId) {
+		void loadSelectedNodeHistory();
+	}
 </script>
 
-<main class="mx-auto max-w-6xl space-y-6 p-6 pl-72">
+<main class="space-y-5 p-6 pl-72">
 	<NavDrawer title={drawerTitles.dashboard} links={drawerLinks} />
-	<header class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+	<header class="border-b border-zinc-200 bg-white px-2 pb-4 pt-1">
 		<p class="text-xs font-medium uppercase tracking-wider text-zinc-500">Statix Dashboard</p>
-		<h1 class="mt-2 text-3xl font-bold text-zinc-900">Cluster Overview</h1>
+		<h1 class="mt-2 text-2xl font-bold text-zinc-900">Cluster Overview</h1>
 		<p class="mt-1 text-sm text-zinc-600">
 			Signed in as {currentUser?.displayName ?? currentUser?.email ?? "user"}
 		</p>
 	</header>
 
-	{#if isAdmin}
-		<Card
-			title="Admin Quick Panel"
-			subtitle="Fast access to admin tooling and high-level stats."
-			class="border-emerald-200 bg-gradient-to-br from-emerald-50 to-white"
-		>
-			<div class="grid gap-4 md:grid-cols-3">
-				<div class="rounded-xl border border-emerald-200 bg-white p-4">
-					<p class="text-xs uppercase tracking-wide text-emerald-700">Total Nodes</p>
-					<p class="mt-2 text-2xl font-semibold text-zinc-900">{nodes.length}</p>
-				</div>
-				<div class="rounded-xl border border-emerald-200 bg-white p-4">
-					<p class="text-xs uppercase tracking-wide text-emerald-700">Your Role</p>
-					<p class="mt-2 text-2xl font-semibold text-zinc-900">Admin</p>
-				</div>
-				<div class="rounded-xl border border-emerald-200 bg-white p-4">
-					<p class="text-xs uppercase tracking-wide text-emerald-700">Auth Tools</p>
-					<p class="mt-2 text-sm text-zinc-600">Use the left sidebar for admin navigation.</p>
-				</div>
-			</div>
-		</Card>
-	{/if}
-
-	<Card
-		title="Node Statistics"
-		subtitle="Live publish activity from node MQTT ingestion."
-		class="border-cyan-200 bg-gradient-to-br from-cyan-50 via-white to-amber-50"
-	>
+	<section class="border border-zinc-200 bg-white p-4">
 		{#if isLoading}
 			<p class="text-zinc-600">Building node statistics...</p>
 		{:else if errorMessage}
 			<p class="text-red-600">{errorMessage}</p>
 		{:else}
-			<div class="grid gap-4 md:grid-cols-4">
-				<article class="rounded-xl border border-cyan-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-cyan-700">Total Publishes</p>
-					<p class="mt-2 text-3xl font-bold text-zinc-900">{totalPublishes}</p>
-				</article>
-				<article class="rounded-xl border border-emerald-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-emerald-700">Active Nodes (2m)</p>
-					<p class="mt-2 text-3xl font-bold text-zinc-900">{activeNodes}</p>
-				</article>
-				<article class="rounded-xl border border-amber-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-amber-700">Avg Publishes / Node</p>
-					<p class="mt-2 text-3xl font-bold text-zinc-900">{avgPublishesPerNode}</p>
-				</article>
-				<article class="rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Latest Publish</p>
-					<p class="mt-2 text-3xl font-bold text-zinc-900">{formatRelative(freshestPublishMs)}</p>
-				</article>
-			</div>
-
-			<div class="mt-4 grid gap-4 md:grid-cols-2">
-				<div class="rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Top Publisher</p>
-					<p class="mt-2 text-xl font-semibold text-zinc-900">{topPublisher?.name ?? topPublisher?.id ?? "n/a"}</p>
-					<p class="mt-1 text-sm text-zinc-600">
-						{topPublisher ? `${topPublisher.publishCount ?? 0} publishes` : "No publish data yet"}
-					</p>
+			<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+				<div class="border border-zinc-200 p-3">
+					<p class="text-[11px] uppercase tracking-wide text-zinc-500">Nodes</p>
+					<p class="mt-1 text-2xl font-semibold text-zinc-900">{nodes.length}</p>
 				</div>
-				<div class="rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Cluster Health</p>
-					<p class="mt-2 text-xl font-semibold text-zinc-900">
-						{activeNodes > 0 ? "Receiving telemetry" : "No active telemetry"}
-					</p>
-					<p class="mt-1 text-sm text-zinc-600">
-						{inactiveNodes} node{inactiveNodes === 1 ? "" : "s"} inactive in the last 2 minutes
-					</p>
+				<div class="border border-zinc-200 p-3">
+					<p class="text-[11px] uppercase tracking-wide text-zinc-500">Active (2m)</p>
+					<p class="mt-1 text-2xl font-semibold text-zinc-900">{activeNodes}</p>
+				</div>
+				<div class="border border-zinc-200 p-3">
+					<p class="text-[11px] uppercase tracking-wide text-zinc-500">Inactive</p>
+					<p class="mt-1 text-2xl font-semibold text-zinc-900">{inactiveNodes}</p>
+				</div>
+				<div class="border border-zinc-200 p-3">
+					<p class="text-[11px] uppercase tracking-wide text-zinc-500">Total Publishes</p>
+					<p class="mt-1 text-2xl font-semibold text-zinc-900">{totalPublishes}</p>
+				</div>
+				<div class="border border-zinc-200 p-3">
+					<p class="text-[11px] uppercase tracking-wide text-zinc-500">Latest Publish</p>
+					<p class="mt-1 text-2xl font-semibold text-zinc-900">{formatRelative(freshestPublishMs)}</p>
 				</div>
 			</div>
-
-			{#if rankedNodes.length > 0}
-				<div class="mt-4 rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Top Nodes by Publish Volume</p>
-					<ul class="mt-3 space-y-2">
-						{#each rankedNodes as node (node.id)}
-							<li class="grid grid-cols-[1fr_auto] items-center gap-3">
-								<p class="truncate text-sm font-medium text-zinc-800">{node.name ?? node.id}</p>
-								<p class="text-xs text-zinc-600">{node.publishCount ?? 0}</p>
-							</li>
-						{/each}
-					</ul>
-				</div>
-			{/if}
 		{/if}
-	</Card>
+	</section>
 
-	<Card
-		title="Selected Node"
-		subtitle="Focused telemetry snapshot for one node."
-		class="border-indigo-200 bg-gradient-to-br from-indigo-50 via-white to-sky-50"
-	>
+	<section class="border border-zinc-200 bg-white p-4">
+		<div class="mb-4 grid gap-2">
+			<h2 class="text-lg font-semibold text-zinc-900">Selected Node Analytics</h2>
+			<p class="text-sm text-zinc-600">Live series and current values for one node.</p>
+		</div>
 		{#if isLoading}
 			<p class="text-zinc-600">Loading node details...</p>
 		{:else if errorMessage}
@@ -331,94 +407,39 @@
 				</select>
 			</div>
 
-			<div class="grid gap-4 md:grid-cols-4">
-				<article class="rounded-xl border border-indigo-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-indigo-700">Status</p>
-					<p class="mt-2 text-2xl font-semibold text-zinc-900">{selectedNodeStatus}</p>
-				</article>
-				<article class="rounded-xl border border-cyan-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-cyan-700">Publishes</p>
-					<p class="mt-2 text-2xl font-semibold text-zinc-900">{selectedNode.publishCount ?? 0}</p>
-				</article>
-				<article class="rounded-xl border border-amber-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-amber-700">Last Publish</p>
-					<p class="mt-2 text-2xl font-semibold text-zinc-900">{formatRelative(selectedNodeLastPublishMs)}</p>
-				</article>
-				<article class="rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Node ID</p>
-					<p class="mt-2 truncate text-sm font-medium text-zinc-900">{selectedNode.id}</p>
-				</article>
-			</div>
-
-			<div class="mt-4 grid gap-4 md:grid-cols-2">
-				<div class="rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Last Seen</p>
-					<p class="mt-2 text-sm text-zinc-700">{new Date(selectedNode.lastSeenAt).toLocaleString()}</p>
+				<div class="grid gap-2 md:grid-cols-4">
+					<article class="border border-zinc-200 p-3">
+						<p class="text-xs uppercase tracking-wide text-indigo-700">Status</p>
+						<p class="mt-1 text-xl font-semibold text-zinc-900">{selectedNodeStatus}</p>
+					</article>
+					<article class="border border-zinc-200 p-3">
+						<p class="text-xs uppercase tracking-wide text-cyan-700">Publishes</p>
+						<p class="mt-1 text-xl font-semibold text-zinc-900">{selectedNode.publishCount ?? 0}</p>
+					</article>
+					<article class="border border-zinc-200 p-3">
+						<p class="text-xs uppercase tracking-wide text-amber-700">Last Publish</p>
+						<p class="mt-1 text-xl font-semibold text-zinc-900">{formatRelative(selectedNodeLastPublishMs)}</p>
+					</article>
+					<article class="border border-zinc-200 p-3">
+						<p class="text-xs uppercase tracking-wide text-zinc-500">Node ID</p>
+						<p class="mt-1 truncate text-sm font-medium text-zinc-900">{selectedNode.id}</p>
+					</article>
 				</div>
-				<div class="rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-					<p class="text-xs uppercase tracking-wide text-zinc-500">Created</p>
-					<p class="mt-2 text-sm text-zinc-700">{new Date(selectedNode.createdAt).toLocaleString()}</p>
-				</div>
-			</div>
 
-			<div class="mt-4 rounded-xl border border-zinc-200 bg-white/90 p-4 shadow-sm">
-				<p class="text-xs uppercase tracking-wide text-zinc-500">Latest Reported Metrics</p>
-				{#if selectedNode.latestMetric}
-					<div class="mt-3 grid gap-3 md:grid-cols-3">
-						<div class="rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">
-							<p class="text-xs uppercase tracking-wide text-cyan-700">CPU</p>
-							<div class="mt-2 flex items-center gap-3">
-								<div
-									class="grid h-16 w-16 place-items-center rounded-full"
-									style={dialStyle(selectedNode.latestMetric.cpu * 100, "#0891b2")}
-								>
-									<div class="grid h-11 w-11 place-items-center rounded-full bg-white text-xs font-semibold text-zinc-800">
-										{(selectedNode.latestMetric.cpu * 100).toFixed(0)}%
-									</div>
-								</div>
-								<p class="text-sm text-zinc-700">{(selectedNode.latestMetric.cpu * 100).toFixed(1)}% load</p>
-							</div>
-						</div>
-						<div class="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
-							<p class="text-xs uppercase tracking-wide text-emerald-700">Memory</p>
-							<div class="mt-2 flex items-center gap-3">
-								<div
-									class="grid h-16 w-16 place-items-center rounded-full"
-									style={dialStyle(
-										percentValue(selectedNode.latestMetric.memUsed, selectedNode.latestMetric.memTotal),
-										"#059669"
-									)}
-								>
-									<div class="grid h-11 w-11 place-items-center rounded-full bg-white text-xs font-semibold text-zinc-800">
-										{formatPercent(selectedNode.latestMetric.memUsed, selectedNode.latestMetric.memTotal)}
-									</div>
-								</div>
-								<p class="text-sm text-zinc-700">
-									{formatBytes(selectedNode.latestMetric.memUsed)} / {formatBytes(selectedNode.latestMetric.memTotal)}
-								</p>
-							</div>
-						</div>
-						<div class="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-							<p class="text-xs uppercase tracking-wide text-amber-700">Disk</p>
-							<div class="mt-2 flex items-center gap-3">
-								<div
-									class="grid h-16 w-16 place-items-center rounded-full"
-									style={dialStyle(
-										percentValue(selectedNode.latestMetric.diskUsed, selectedNode.latestMetric.diskTotal),
-										"#d97706"
-									)}
-								>
-									<div class="grid h-11 w-11 place-items-center rounded-full bg-white text-xs font-semibold text-zinc-800">
-										{formatPercent(selectedNode.latestMetric.diskUsed, selectedNode.latestMetric.diskTotal)}
-									</div>
-								</div>
-								<p class="text-sm text-zinc-700">
-									{formatBytes(selectedNode.latestMetric.diskUsed)} / {formatBytes(selectedNode.latestMetric.diskTotal)}
-								</p>
-							</div>
-						</div>
+				<div class="mt-2 grid gap-2 md:grid-cols-2">
+					<div class="border border-zinc-200 p-3">
+						<p class="text-xs uppercase tracking-wide text-zinc-500">Last Seen</p>
+						<p class="mt-1 text-sm text-zinc-700">{new Date(selectedNode.lastSeenAt).toLocaleString()}</p>
 					</div>
+					<div class="border border-zinc-200 p-3">
+						<p class="text-xs uppercase tracking-wide text-zinc-500">Created</p>
+						<p class="mt-1 text-sm text-zinc-700">{new Date(selectedNode.createdAt).toLocaleString()}</p>
+					</div>
+				</div>
 
+				<div class="mt-2 border border-zinc-200 p-3">
+					<p class="text-xs uppercase tracking-wide text-zinc-500">Latest Reported Metrics</p>
+					{#if selectedNode.latestMetric}
 					<div class="mt-3 grid gap-3 md:grid-cols-2">
 						<p class="text-sm text-zinc-700">
 							<span class="font-medium text-zinc-900">CPU:</span>
@@ -443,14 +464,86 @@
 							{new Date(selectedNode.latestMetric.ts).toLocaleString()}
 						</p>
 					</div>
+
+						{#if selectedNodeHistory.length > 1}
+							<div class="mt-4 space-y-3">
+								<div class="border border-zinc-200 p-2">
+									<div class="grid grid-cols-[1fr_auto] items-center">
+										<p class="text-xs uppercase tracking-wide text-zinc-600">CPU %</p>
+										<p class="text-xs text-zinc-500">
+											min {cpuSummary.min.toFixed(1)} • avg {cpuSummary.avg.toFixed(1)} • max {cpuSummary.max.toFixed(1)}
+										</p>
+									</div>
+									<svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} class="mt-2 h-48 w-full">
+										<line x1={cpuChart.plotLeft} y1={cpuChart.plotBottom} x2={cpuChart.plotRight} y2={cpuChart.plotBottom} stroke="#d4d4d8" stroke-width="1" />
+										<line x1={cpuChart.plotLeft} y1={cpuChart.plotTop} x2={cpuChart.plotLeft} y2={cpuChart.plotBottom} stroke="#d4d4d8" stroke-width="1" />
+										{#each cpuChart.yTicks as tick}
+											<line x1={cpuChart.plotLeft} y1={tick.y} x2={cpuChart.plotRight} y2={tick.y} stroke="#f4f4f5" stroke-width="1" />
+											<text x={cpuChart.plotLeft - 6} y={tick.y + 3} text-anchor="end" class="fill-zinc-500 text-[9px]">{tick.label}</text>
+										{/each}
+										{#each cpuChart.xTicks as tick}
+											<line x1={tick.x} y1={cpuChart.plotBottom} x2={tick.x} y2={cpuChart.plotBottom + 4} stroke="#d4d4d8" stroke-width="1" />
+											<text x={tick.x} y={cpuChart.plotBottom + 14} text-anchor="middle" class="fill-zinc-500 text-[9px]">{tick.label}</text>
+										{/each}
+										<path d={cpuChart.path} fill="none" stroke="#0891b2" stroke-width="2.5" />
+									</svg>
+								</div>
+								<div class="border border-zinc-200 p-2">
+									<div class="grid grid-cols-[1fr_auto] items-center">
+										<p class="text-xs uppercase tracking-wide text-zinc-600">Memory %</p>
+									<p class="text-xs text-zinc-500">
+											min {memSummary.min.toFixed(1)} • avg {memSummary.avg.toFixed(1)} • max {memSummary.max.toFixed(1)}
+										</p>
+									</div>
+									<svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} class="mt-2 h-48 w-full">
+										<line x1={memChart.plotLeft} y1={memChart.plotBottom} x2={memChart.plotRight} y2={memChart.plotBottom} stroke="#d4d4d8" stroke-width="1" />
+										<line x1={memChart.plotLeft} y1={memChart.plotTop} x2={memChart.plotLeft} y2={memChart.plotBottom} stroke="#d4d4d8" stroke-width="1" />
+										{#each memChart.yTicks as tick}
+											<line x1={memChart.plotLeft} y1={tick.y} x2={memChart.plotRight} y2={tick.y} stroke="#f4f4f5" stroke-width="1" />
+											<text x={memChart.plotLeft - 6} y={tick.y + 3} text-anchor="end" class="fill-zinc-500 text-[9px]">{tick.label}</text>
+										{/each}
+										{#each memChart.xTicks as tick}
+											<line x1={tick.x} y1={memChart.plotBottom} x2={tick.x} y2={memChart.plotBottom + 4} stroke="#d4d4d8" stroke-width="1" />
+											<text x={tick.x} y={memChart.plotBottom + 14} text-anchor="middle" class="fill-zinc-500 text-[9px]">{tick.label}</text>
+										{/each}
+										<path d={memChart.path} fill="none" stroke="#059669" stroke-width="2.5" />
+									</svg>
+								</div>
+								<div class="border border-zinc-200 p-2">
+									<div class="grid grid-cols-[1fr_auto] items-center">
+										<p class="text-xs uppercase tracking-wide text-zinc-600">Disk %</p>
+									<p class="text-xs text-zinc-500">
+											min {diskSummary.min.toFixed(1)} • avg {diskSummary.avg.toFixed(1)} • max {diskSummary.max.toFixed(1)}
+										</p>
+									</div>
+									<svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} class="mt-2 h-48 w-full">
+										<line x1={diskChart.plotLeft} y1={diskChart.plotBottom} x2={diskChart.plotRight} y2={diskChart.plotBottom} stroke="#d4d4d8" stroke-width="1" />
+										<line x1={diskChart.plotLeft} y1={diskChart.plotTop} x2={diskChart.plotLeft} y2={diskChart.plotBottom} stroke="#d4d4d8" stroke-width="1" />
+										{#each diskChart.yTicks as tick}
+											<line x1={diskChart.plotLeft} y1={tick.y} x2={diskChart.plotRight} y2={tick.y} stroke="#f4f4f5" stroke-width="1" />
+											<text x={diskChart.plotLeft - 6} y={tick.y + 3} text-anchor="end" class="fill-zinc-500 text-[9px]">{tick.label}</text>
+										{/each}
+										{#each diskChart.xTicks as tick}
+											<line x1={tick.x} y1={diskChart.plotBottom} x2={tick.x} y2={diskChart.plotBottom + 4} stroke="#d4d4d8" stroke-width="1" />
+											<text x={tick.x} y={diskChart.plotBottom + 14} text-anchor="middle" class="fill-zinc-500 text-[9px]">{tick.label}</text>
+										{/each}
+										<path d={diskChart.path} fill="none" stroke="#d97706" stroke-width="2.5" />
+									</svg>
+								</div>
+							</div>
+						{/if}
 				{:else}
 					<p class="mt-2 text-sm text-zinc-600">No metric sample has been ingested for this node yet.</p>
 				{/if}
 			</div>
 		{/if}
-	</Card>
+	</section>
 
-	<Card title="Running Nodes" subtitle="Nodes that are currently running and processing data.">
+	<section class="border border-zinc-200 bg-white p-4">
+		<div class="mb-4 grid gap-2">
+			<h2 class="text-lg font-semibold text-zinc-900">Running Nodes</h2>
+			<p class="text-sm text-zinc-600">Nodes that are currently running and processing data.</p>
+		</div>
 		{#if isLoading}
 			<p>Loading nodes...</p>
 		{:else if errorMessage}
@@ -458,24 +551,49 @@
 		{:else if nodes.length === 0}
 			<p>No nodes found.</p>
 		{:else}
-			<ul class="space-y-2">
-				{#each nodes as node (node.id)}
-					<li class="rounded-lg border border-zinc-200 p-3">
-						<p class="font-medium text-zinc-900">{node.name ?? node.id}</p>
-						<p class="text-sm text-zinc-600">ID: {node.id}</p>
-						<p class="text-sm text-zinc-600">
-							Last seen: {new Date(node.lastSeenAt).toLocaleString()}
-						</p>
-						<p class="text-sm text-zinc-600">
-							Publishes: {typeof node.publishCount === "number" ? node.publishCount : 0}
-						</p>
-						<p class="text-sm text-zinc-600">
-							Last publish:
-							{node.lastPublishAt ? new Date(node.lastPublishAt).toLocaleString() : " n/a"}
-						</p>
-					</li>
-				{/each}
-			</ul>
+			<div class="overflow-x-auto">
+				<table class="w-full border-collapse text-sm">
+					<thead>
+						<tr class="border-b border-zinc-200 text-left text-xs uppercase tracking-wide text-zinc-500">
+							<th class="px-2 py-2 font-medium">Node</th>
+							<th class="px-2 py-2 font-medium">Status</th>
+							<th class="px-2 py-2 font-medium">Publishes</th>
+							<th class="px-2 py-2 font-medium">Last Publish</th>
+							<th class="px-2 py-2 font-medium">CPU</th>
+							<th class="px-2 py-2 font-medium">Mem %</th>
+							<th class="px-2 py-2 font-medium">Disk %</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each nodes as node (node.id)}
+							<tr class="border-b border-zinc-100">
+								<td class="px-2 py-2">
+									<p class="font-medium text-zinc-900">{node.name ?? node.id}</p>
+									<p class="text-xs text-zinc-500">{node.id}</p>
+								</td>
+								<td class="px-2 py-2 text-zinc-700">{isNodeActive(node) ? "Active" : "Idle"}</td>
+								<td class="px-2 py-2 text-zinc-700">{node.publishCount ?? 0}</td>
+								<td class="px-2 py-2 text-zinc-700">
+									{node.lastPublishAt ? new Date(node.lastPublishAt).toLocaleString() : "n/a"}
+								</td>
+								<td class="px-2 py-2 text-zinc-700">
+									{node.latestMetric ? `${(node.latestMetric.cpu * 100).toFixed(1)}%` : "n/a"}
+								</td>
+								<td class="px-2 py-2 text-zinc-700">
+									{node.latestMetric
+										? formatPercent(node.latestMetric.memUsed, node.latestMetric.memTotal)
+										: "n/a"}
+								</td>
+								<td class="px-2 py-2 text-zinc-700">
+									{node.latestMetric
+										? formatPercent(node.latestMetric.diskUsed, node.latestMetric.diskTotal)
+										: "n/a"}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{/if}
-	</Card>
+	</section>
 </main>
