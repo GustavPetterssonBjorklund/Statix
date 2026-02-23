@@ -24,10 +24,12 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY --from=build /repo/node_modules /app/node_modules
+COPY --from=build /repo/apps/node/node_modules /app/apps/node/node_modules
 COPY --from=build /repo/apps/node/package.json /app/apps/node/package.json
 COPY --from=build /repo/apps/node/dist /app/apps/node/dist
 COPY --from=build /repo/apps/node/version.json /app/apps/node/version.json
 COPY --from=build /repo/packages/shared/dist /app/packages/shared/dist
 COPY --from=build /repo/packages/shared/package.json /app/packages/shared/package.json
+COPY --from=build /repo/packages/shared/node_modules /app/packages/shared/node_modules
 
 CMD ["node", "apps/node/dist/index.js"]

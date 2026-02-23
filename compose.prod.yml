@@ -44,6 +44,29 @@ services:
     networks:
       - statix
 
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: statix-server:local
+    container_name: statix-migrate
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${APP_DATABASE_URL:-postgresql://statix:statix@db:5432/statix?schema=public}
+    command:
+      [
+        "/app/apps/api/node_modules/.bin/prisma",
+        "migrate",
+        "deploy",
+        "--schema",
+        "/app/apps/api/prisma/schema.prisma"
+      ]
+    networks:
+      - statix
+
   server:
     build:
       context: .
@@ -52,19 +75,39 @@ services:
     container_name: statix-server
     restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
       mqtt:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://statix:statix@db:5432/statix?schema=public}
+      DATABASE_URL: ${APP_DATABASE_URL:-postgresql://statix:statix@db:5432/statix?schema=public}
       MQTT_HOST: ${MQTT_HOST:-mqtt}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_USERNAME: ${MQTT_USERNAME:-statix-node}
       MQTT_PASSWORD: ${MQTT_PASSWORD:-change-me-dev}
-      PORT: ${PORT:-3001}
+      PORT: ${SERVER_PORT:-3001}
     ports:
-      - "${PORT:-3001}:3001"
+      - "${SERVER_PORT:-3001}:3001"
+    networks:
+      - statix
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: statix-web:local
+    container_name: statix-web
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_started
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://server:3001}
+      HOST: 0.0.0.0
+      PORT: ${WEB_PORT:-3000}
+      ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
     networks:
       - statix
 
