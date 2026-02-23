@@ -1,0 +1,73 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: statix-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-statix}
+      POSTGRES_USER: ${POSTGRES_USER:-statix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-statix}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ${STATIX_VOLUMES_BASE:-./.statix-volumes}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-statix} -d ${POSTGRES_DB:-statix}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - statix
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: statix-mqtt
+    restart: unless-stopped
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-statix-node}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-change-me-dev}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mosquitto_passwd -b -c /mosquitto/config/passwords "$${MQTT_USERNAME}" "$${MQTT_PASSWORD}"
+        chmod 644 /mosquitto/config/passwords
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_WS_PORT:-9001}:9001"
+    volumes:
+      - ./ops/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${STATIX_VOLUMES_BASE:-./.statix-volumes}/mosquitto/data:/mosquitto/data
+      - ${STATIX_VOLUMES_BASE:-./.statix-volumes}/mosquitto/log:/mosquitto/log
+    networks:
+      - statix
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: statix-server:local
+    container_name: statix-server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://statix:statix@db:5432/statix?schema=public}
+      MQTT_HOST: ${MQTT_HOST:-mqtt}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_USERNAME: ${MQTT_USERNAME:-statix-node}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-change-me-dev}
+      PORT: ${PORT:-3001}
+    ports:
+      - "${PORT:-3001}:3001"
+    networks:
+      - statix
+
+networks:
+  statix:
+    name: ${STATIX_NETWORK:-statix}
