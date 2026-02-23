@@ -3,6 +3,7 @@ import mqtt, { type MqttClient } from "mqtt";
 import { exchangeNodeToken, type BrokerCredentials } from "./api.js";
 import { loadConfig } from "./config.js";
 import { collectMetrics } from "./metrics.js";
+import { collectSystemInfo } from "./system-info.js";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -17,9 +18,9 @@ function sameCredentials(a: BrokerCredentials, b: BrokerCredentials) {
   );
 }
 
-function publishAsync(client: MqttClient, topic: string, payload: string) {
+function publishAsync(client: MqttClient, topic: string, payload: string, options?: { retain?: boolean }) {
   return new Promise<void>((resolve, reject) => {
-    client.publish(topic, payload, { qos: 1 }, (error) => {
+    client.publish(topic, payload, { qos: 1, retain: options?.retain ?? false }, (error) => {
       if (error) {
         reject(error);
         return;
@@ -31,8 +32,11 @@ function publishAsync(client: MqttClient, topic: string, payload: string) {
 
 async function runSession(
   credentials: BrokerCredentials,
-  publishTopic: string,
+  metricsTopic: string,
+  systemInfoTopic: string,
   publishIntervalMs: number,
+  systemInfoCheckIntervalMs: number,
+  systemInfoRepublishIntervalMs: number,
   exchangeIntervalMs: number,
   connectTimeoutMs: number,
   refreshCredentials: () => Promise<BrokerCredentials>
@@ -40,8 +44,12 @@ async function runSession(
   return new Promise<BrokerCredentials | null>((resolve) => {
     let rotateTo: BrokerCredentials | null = null;
     let publishTimer: NodeJS.Timeout | null = null;
+    let systemInfoTimer: NodeJS.Timeout | null = null;
     let refreshTimer: NodeJS.Timeout | null = null;
     let publishInFlight = false;
+    let systemInfoInFlight = false;
+    let lastSystemInfoHash: string | null = null;
+    let lastSystemInfoPublishedAt = 0;
 
     const protocol = credentials.port === 9001 ? "ws" : "mqtt";
     const client = mqtt.connect({
@@ -62,8 +70,12 @@ async function runSession(
       if (refreshTimer) {
         clearInterval(refreshTimer);
       }
+      if (systemInfoTimer) {
+        clearInterval(systemInfoTimer);
+      }
       publishTimer = null;
       refreshTimer = null;
+      systemInfoTimer = null;
     };
 
     const publishOnce = async () => {
@@ -74,7 +86,7 @@ async function runSession(
 
       try {
         const metrics = await collectMetrics();
-        await publishAsync(client, publishTopic, JSON.stringify(metrics));
+        await publishAsync(client, metricsTopic, JSON.stringify(metrics));
       } catch (error) {
         console.error("[node-agent] publish failed:", error);
       } finally {
@@ -82,12 +94,41 @@ async function runSession(
       }
     };
 
+    const publishSystemInfoIfNeeded = async (force = false) => {
+      if (systemInfoInFlight || !client.connected) {
+        return;
+      }
+      systemInfoInFlight = true;
+
+      try {
+        const systemInfo = await collectSystemInfo();
+        const now = Date.now();
+        const shouldRepublishForFreshness =
+          now - lastSystemInfoPublishedAt >= systemInfoRepublishIntervalMs;
+        const hasChanged = systemInfo.hash !== lastSystemInfoHash;
+
+        if (force || hasChanged || shouldRepublishForFreshness) {
+          await publishAsync(client, systemInfoTopic, JSON.stringify(systemInfo), { retain: true });
+          lastSystemInfoHash = systemInfo.hash;
+          lastSystemInfoPublishedAt = now;
+        }
+      } catch (error) {
+        console.error("[node-agent] system info publish failed:", error);
+      } finally {
+        systemInfoInFlight = false;
+      }
+    };
+
     client.on("connect", () => {
       console.log(`[node-agent] connected to mqtt://${credentials.host}:${credentials.port}`);
       void publishOnce();
+      void publishSystemInfoIfNeeded(true);
       publishTimer = setInterval(() => {
         void publishOnce();
       }, publishIntervalMs);
+      systemInfoTimer = setInterval(() => {
+        void publishSystemInfoIfNeeded(false);
+      }, systemInfoCheckIntervalMs);
 
       refreshTimer = setInterval(() => {
         void (async () => {
@@ -142,8 +183,11 @@ async function main() {
       const currentCredentials = nextCredentials ?? (await exchangeNodeToken(config));
       nextCredentials = await runSession(
         currentCredentials,
-        config.publishTopic,
+        config.metricsTopic,
+        config.systemInfoTopic,
         config.publishIntervalMs,
+        config.systemInfoCheckIntervalMs,
+        config.systemInfoRepublishIntervalMs,
         config.exchangeIntervalMs,
         config.connectTimeoutMs,
         () => exchangeNodeToken(config)

@@ -1,6 +1,6 @@
 import { Prisma, TokenType } from "@prisma/client";
 import { ulid } from "ulid";
-import type { MetricsPayload } from "@statix/shared";
+import { SystemInfoSchema, type MetricsPayload, type SystemInfoPayload } from "@statix/shared";
 
 import { prisma } from "../lib/prisma.js";
 import { markNodesChanged } from "../realtime/nodes.js";
@@ -31,6 +31,14 @@ export async function listNodes() {
       _count: {
         select: { metrics: true },
       },
+      systemInfo: {
+        select: {
+          hash: true,
+          payload: true,
+          reportedTs: true,
+          updatedAt: true,
+        },
+      },
     },
   });
 
@@ -54,6 +62,17 @@ export async function listNodes() {
           netRx: Number(node.metrics[0].netRx),
           netTx: Number(node.metrics[0].netTx),
         }
+      : null,
+    systemInfo: node.systemInfo
+      ? (() => {
+          const parsed = SystemInfoSchema.safeParse(node.systemInfo.payload);
+          return {
+            hash: node.systemInfo.hash,
+            reportedTs: Number(node.systemInfo.reportedTs),
+            updatedAt: node.systemInfo.updatedAt,
+            info: parsed.success ? parsed.data.info : null,
+          };
+        })()
       : null,
   }));
 }
@@ -177,6 +196,54 @@ export namespace MetricStore {
         netRx: Number(row.netRx),
         netTx: Number(row.netTx),
       }));
+  }
+}
+
+export namespace SystemInfoStore {
+  export async function upsertNodeSystemInfo(nodeId: string, payload: SystemInfoPayload) {
+    const tsValue = toBigInt(payload.ts);
+    const observedAt = new Date(Number(tsValue));
+
+    const existing = await prisma.nodeSystemInfo.findUnique({
+      where: { nodeId },
+      select: { hash: true },
+    });
+
+    if (existing?.hash === payload.hash) {
+      await prisma.node.update({
+        where: { id: nodeId },
+        data: {
+          lastSeenAt: observedAt,
+        },
+      });
+      return { changed: false };
+    }
+
+    await prisma.$transaction([
+      prisma.nodeSystemInfo.upsert({
+        where: { nodeId },
+        update: {
+          hash: payload.hash,
+          payload: payload as unknown as Prisma.InputJsonObject,
+          reportedTs: tsValue,
+        },
+        create: {
+          nodeId,
+          hash: payload.hash,
+          payload: payload as unknown as Prisma.InputJsonObject,
+          reportedTs: tsValue,
+        },
+      }),
+      prisma.node.update({
+        where: { id: nodeId },
+        data: {
+          lastSeenAt: observedAt,
+        },
+      }),
+    ]);
+
+    markNodesChanged();
+    return { changed: true };
   }
 }
 

@@ -192,6 +192,7 @@ model Node {
   updatedAt  DateTime @updatedAt
 
   metrics    Metric[]
+  systemInfo NodeSystemInfo?
 }
 
 model Metric {
@@ -211,4 +212,17 @@ model Metric {
 
   @@index([nodeId, ts])
   @@map("metrics")
+}
+
+model NodeSystemInfo {
+  nodeId     String   @id
+  node       Node     @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  hash       String
+  payload    Json
+  reportedTs BigInt   @map("reported_ts")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([hash])
+  @@map("node_system_info")
 }

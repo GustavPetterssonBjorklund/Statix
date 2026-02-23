@@ -7,7 +7,7 @@ export function startMqttIngest() {
   const port = Number(process.env.MQTT_PORT ?? 1883);
   const username = process.env.MQTT_USERNAME ?? "statix-node";
   const password = process.env.MQTT_PASSWORD ?? "change-me-dev";
-  const topicFilter = process.env.MQTT_METRICS_TOPIC_FILTER ?? "statix/nodes/+/metrics";
+  const topicFilter = process.env.MQTT_METRICS_TOPIC_FILTER ?? "statix/nodes/+/+";
   const protocol = port === 9001 ? "ws" : "mqtt";
 
   const client: MqttClient = mqtt.connect({

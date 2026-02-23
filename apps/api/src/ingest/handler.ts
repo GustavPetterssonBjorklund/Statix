@@ -1,11 +1,12 @@
-import { MetricsSchema } from "@statix/shared";
+import { MetricsSchema, SystemInfoSchema } from "@statix/shared";
 
-import { MetricStore } from "../store/prisma.js";
-import { parseNodeMetricsTopic } from "./topic.js";
+import { MetricStore, SystemInfoStore } from "../store/prisma.js";
+import { parseNodeMetricsTopic, parseNodeSystemInfoTopic } from "./topic.js";
 
 export async function handleMqttMessage(topic: string, payloadBuffer: Buffer) {
   const topicMatch = parseNodeMetricsTopic(topic);
-  if (!topicMatch) {
+  const systemInfoTopicMatch = parseNodeSystemInfoTopic(topic);
+  if (!topicMatch && !systemInfoTopicMatch) {
     return;
   }
 
@@ -17,15 +18,32 @@ export async function handleMqttMessage(topic: string, payloadBuffer: Buffer) {
     return;
   }
 
-  const parsed = MetricsSchema.safeParse(raw);
-  if (!parsed.success) {
-    console.warn("[ingest] invalid metrics payload:", parsed.error.message);
+  if (topicMatch) {
+    const parsed = MetricsSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.warn("[ingest] invalid metrics payload:", parsed.error.message);
+      return;
+    }
+
+    try {
+      await MetricStore.appendNodeMetric(topicMatch.nodeId, parsed.data);
+    } catch (error) {
+      console.warn("[ingest] failed to persist metrics:", error);
+    }
     return;
   }
 
-  try {
-    await MetricStore.appendNodeMetric(topicMatch.nodeId, parsed.data);
-  } catch (error) {
-    console.warn("[ingest] failed to persist metrics:", error);
+  if (systemInfoTopicMatch) {
+    const parsed = SystemInfoSchema.safeParse(raw);
+    if (!parsed.success) {
+      console.warn("[ingest] invalid system info payload:", parsed.error.message);
+      return;
+    }
+
+    try {
+      await SystemInfoStore.upsertNodeSystemInfo(systemInfoTopicMatch.nodeId, parsed.data);
+    } catch (error) {
+      console.warn("[ingest] failed to persist system info:", error);
+    }
   }
 }
