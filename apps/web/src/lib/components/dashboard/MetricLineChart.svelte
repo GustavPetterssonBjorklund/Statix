@@ -4,6 +4,7 @@
 
 	type LineChart = {
 		path: string;
+		secondaryPath: string;
 		areaPath: string;
 		xTicks: Array<{ x: number; label: string }>;
 		yTicks: Array<{ y: number; label: string; value: number }>;
@@ -14,9 +15,24 @@
 		lastX: number;
 		lastY: number;
 		lastValue: number | null;
+		secondaryLastX: number;
+		secondaryLastY: number;
+		secondaryLastValue: number | null;
 	};
 
-	let { title, values, timestamps, stroke, yDomain, width = 760, height = 220 } =
+	let {
+		title,
+		values,
+		timestamps,
+		stroke,
+		yDomain,
+		width = 760,
+		height = 220,
+		seriesLabel,
+		secondaryValues = [],
+		secondaryStroke,
+		secondaryLabel
+	} =
 		$props<{
 			title: string;
 			values: number[];
@@ -25,6 +41,10 @@
 			yDomain?: [number, number];
 			width?: number;
 			height?: number;
+			seriesLabel?: string;
+			secondaryValues?: number[];
+			secondaryStroke?: string;
+			secondaryLabel?: string;
 		}>();
 
 	function isPercentDomain(domain?: [number, number]) {
@@ -52,6 +72,7 @@
 
 	function buildLineChart(
 		seriesValues: number[],
+		seriesValuesSecondary: number[],
 		seriesTimes: number[],
 		chartWidth: number,
 		chartHeight: number,
@@ -70,6 +91,7 @@
 		if (seriesValues.length === 0 || seriesTimes.length === 0) {
 			return {
 				path: "",
+				secondaryPath: "",
 				areaPath: "",
 				xTicks: [],
 				yTicks: [],
@@ -80,10 +102,14 @@
 				lastX: margin.left,
 				lastY: margin.top + plotHeight,
 				lastValue: null,
+				secondaryLastX: margin.left,
+				secondaryLastY: margin.top + plotHeight,
+				secondaryLastValue: null,
 			};
 		}
 
 		let safeValues = seriesValues;
+		let safeSecondaryValues = seriesValuesSecondary;
 		let safeTimes = seriesTimes;
 
 		// ensure we can draw a line even with one point
@@ -91,6 +117,9 @@
 			safeValues = [safeValues[0], safeValues[0]];
 			const t = safeTimes[0] ?? Date.now();
 			safeTimes = [t - 1000, t];
+			if (safeSecondaryValues.length === 1) {
+				safeSecondaryValues = [safeSecondaryValues[0], safeSecondaryValues[0]];
+			}
 		}
 
 		const minTime = Math.min(...safeTimes);
@@ -104,7 +133,10 @@
 		const computedYDomain: [number, number] =
 			Array.isArray(fixedYDomain) && fixedYDomain.length === 2
 				? [Math.min(fixedYDomain[0], fixedYDomain[1]), Math.max(fixedYDomain[0], fixedYDomain[1])]
-				: [Math.min(...safeValues), Math.max(...safeValues)];
+				: [
+					Math.min(...safeValues, ...(safeSecondaryValues.length > 0 ? safeSecondaryValues : [])),
+					Math.max(...safeValues, ...(safeSecondaryValues.length > 0 ? safeSecondaryValues : [])),
+				];
 
 		// Avoid flatline domain
 		if (computedYDomain[0] === computedYDomain[1]) {
@@ -146,9 +178,13 @@
 		const lastIndex = Math.max(0, seriesValues.length - 1);
 		const lastValue = seriesValues[lastIndex] ?? null;
 		const lastTime = seriesTimes[lastIndex] ?? paddedMaxTime;
+		const secondaryLastIndex = Math.max(0, seriesValuesSecondary.length - 1);
+		const secondaryLastValue = seriesValuesSecondary[secondaryLastIndex] ?? null;
+		const secondaryLastTime = seriesTimes[secondaryLastIndex] ?? paddedMaxTime;
 
 		return {
 			path: lineGen(safeValues) ?? "",
+			secondaryPath: safeSecondaryValues.length > 0 ? (lineGen(safeSecondaryValues) ?? "") : "",
 			areaPath: areaGen(safeValues) ?? "",
 			xTicks,
 			yTicks,
@@ -159,6 +195,9 @@
 			lastX: xScale(new Date(lastTime)),
 			lastY: lastValue == null ? margin.top + plotHeight : yScale(lastValue),
 			lastValue,
+			secondaryLastX: xScale(new Date(secondaryLastTime)),
+			secondaryLastY: secondaryLastValue == null ? margin.top + plotHeight : yScale(secondaryLastValue),
+			secondaryLastValue,
 		};
 	}
 
@@ -170,12 +209,21 @@
 		return { min, max, avg };
 	}
 
-	const chart = $derived(buildLineChart(values, timestamps, width, height, yDomain));
+	const chart = $derived(buildLineChart(values, secondaryValues, timestamps, width, height, yDomain));
 	const summary = $derived(summarizeSeries(values));
+	const secondarySummary = $derived(summarizeSeries(secondaryValues));
 	const gradientId = $derived(`line-gradient-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
 	const isPct = $derived(isPercentDomain(yDomain));
+	const primaryLegendLabel = $derived(seriesLabel ?? title);
 	const lastLabel = $derived(
 		chart.lastValue == null ? "—" : isPct ? `${chart.lastValue.toFixed(0)}%` : formatY(chart.lastValue, yDomain)
+	);
+	const secondaryLastLabel = $derived(
+		chart.secondaryLastValue == null
+			? "—"
+			: isPct
+				? `${chart.secondaryLastValue.toFixed(0)}%`
+				: formatY(chart.secondaryLastValue, yDomain)
 	);
 </script>
 
@@ -274,27 +322,44 @@
 
 		<!-- Line -->
 		<path d={chart.path} fill="none" stroke={`url(#${gradientId})`} stroke-width="2.75" />
+		{#if chart.secondaryPath && secondaryStroke}
+			<path d={chart.secondaryPath} fill="none" stroke={secondaryStroke} stroke-width="2.25" />
+		{/if}
 
 		<!-- Last point marker -->
 		{#if chart.lastValue !== null}
 			<circle cx={chart.lastX} cy={chart.lastY} r="3.5" fill={stroke} />
 			<circle cx={chart.lastX} cy={chart.lastY} r="7" fill={stroke} opacity="0.12" />
 		{/if}
+		{#if chart.secondaryLastValue !== null && secondaryStroke}
+			<circle cx={chart.secondaryLastX} cy={chart.secondaryLastY} r="3" fill={secondaryStroke} />
+		{/if}
 	</svg>
 
 	<!-- Legend / info bottom (priority: information) -->
 	<div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-700">
 		<div class="flex items-center gap-2">
-				<span class="h-2.5 w-6 rounded-sm" style={`background:${stroke}`}></span>
-			<span class="font-medium text-zinc-800">{title}</span>
+			<span class="h-2.5 w-6 rounded-sm" style={`background:${stroke}`}></span>
+			<span class="font-medium text-zinc-800">{primaryLegendLabel}</span>
+			{#if secondaryStroke && secondaryLabel}
+				<span class="ml-2 h-2.5 w-6 rounded-sm" style={`background:${secondaryStroke}`}></span>
+				<span class="font-medium text-zinc-800">{secondaryLabel}</span>
+			{/if}
 		</div>
 
 		<div class="flex flex-wrap items-center gap-3 tabular-nums">
-			<span class="text-zinc-600">latest</span>
+			<span class="text-zinc-600">{primaryLegendLabel}</span>
 			<span class="rounded-md bg-zinc-50 px-2 py-1 font-semibold text-zinc-900">{lastLabel}</span>
 			<span class="text-zinc-500">
 				range {formatY(summary.min, yDomain)}–{formatY(summary.max, yDomain)}
 			</span>
+			{#if secondaryStroke && secondaryLabel}
+				<span class="text-zinc-600">{secondaryLabel}</span>
+				<span class="rounded-md bg-zinc-50 px-2 py-1 font-semibold text-zinc-900">{secondaryLastLabel}</span>
+				<span class="text-zinc-500">
+					range {formatY(secondarySummary.min, yDomain)}–{formatY(secondarySummary.max, yDomain)}
+				</span>
+			{/if}
 		</div>
 	</div>
 </div>

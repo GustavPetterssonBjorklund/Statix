@@ -6,6 +6,8 @@
 	import { drawerLinks, drawerTitles } from "$lib/config/drawer";
 	import { connectLiveNodes } from "$lib/live-nodes";
 	import MetricLineChart from "$lib/components/dashboard/MetricLineChart.svelte";
+	import { TriangleAlert } from "lucide-svelte";
+
 
 	type AuthUser = {
 		id: string;
@@ -121,6 +123,14 @@
 		return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 	}
 
+	function formatBytesPerSecond(value: number | undefined) {
+		if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+			return "n/a";
+		}
+
+		return `${formatBytes(value)}/s`;
+	}
+
 	function formatPercent(part: number | undefined, total: number | undefined) {
 		if (
 			typeof part !== "number" ||
@@ -147,6 +157,40 @@
 		}
 
 		return Math.max(0, Math.min(100, (part / total) * 100));
+	}
+
+	function buildRateSeries(values: number[], timestamps: number[]) {
+		if (values.length === 0 || timestamps.length === 0) {
+			return [];
+		}
+
+		return values.map((value, index) => {
+			if (index === 0) {
+				return 0;
+			}
+
+			const previousValue = values[index - 1];
+			const previousTs = timestamps[index - 1];
+			const currentTs = timestamps[index];
+			if (
+				typeof previousValue !== "number" ||
+				typeof previousTs !== "number" ||
+				typeof currentTs !== "number" ||
+				!Number.isFinite(previousValue) ||
+				!Number.isFinite(previousTs) ||
+				!Number.isFinite(currentTs)
+			) {
+				return 0;
+			}
+
+			const bytesDelta = value - previousValue;
+			const secondsDelta = (currentTs - previousTs) / 1000;
+			if (secondsDelta <= 0 || bytesDelta < 0) {
+				return 0;
+			}
+
+			return bytesDelta / secondsDelta;
+		});
 	}
 
 	function isNodeActive(node: NodeDto) {
@@ -186,6 +230,26 @@
 	$: cpuSeries = selectedNodeHistory.map((point) => point.cpu * 100);
 	$: memSeries = selectedNodeHistory.map((point) => percentValue(point.memUsed, point.memTotal));
 	$: timeSeries = selectedNodeHistory.map((point) => point.ts);
+	$: diskSeries = selectedNodeHistory.map((point) => percentValue(point.diskUsed, point.diskTotal));
+	$: netRxCounterSeries = selectedNodeHistory.map((point) => point.netRx);
+	$: netTxCounterSeries = selectedNodeHistory.map((point) => point.netTx);
+	$: netRxRateSeries = buildRateSeries(netRxCounterSeries, timeSeries);
+	$: netTxRateSeries = buildRateSeries(netTxCounterSeries, timeSeries);
+	$: selectedNodeLatestMetric = selectedNode?.latestMetric ?? null;
+	$: selectedNodeCpuPercent =
+		selectedNodeLatestMetric && Number.isFinite(selectedNodeLatestMetric.cpu)
+			? Math.max(0, Math.min(100, selectedNodeLatestMetric.cpu * 100))
+			: null;
+	$: selectedNodeMemPercent = selectedNodeLatestMetric
+		? percentValue(selectedNodeLatestMetric.memUsed, selectedNodeLatestMetric.memTotal)
+		: null;
+	$: selectedNodeDiskPercent = selectedNodeLatestMetric
+		? percentValue(selectedNodeLatestMetric.diskUsed, selectedNodeLatestMetric.diskTotal)
+		: null;
+	$: selectedNodeNetRxRate =
+		netRxRateSeries.length > 0 ? netRxRateSeries[netRxRateSeries.length - 1] : null;
+	$: selectedNodeNetTxRate =
+		netTxRateSeries.length > 0 ? netTxRateSeries[netTxRateSeries.length - 1] : null;
 
 	async function loadSelectedNodeHistory() {
 		if (!selectedNodeId) {
@@ -275,9 +339,7 @@
 		<div class="rounded-md bg-red-50 p-4">
 			<div class="flex">
 				<div class="flex-shrink-0">
-					<svg class="h-5 w-5 text-red-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-						<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.707-11.707a1 1 0 00-1.414-1.414L8.586 10l-2.293-2.293a1 1 0 00-1.414 1.414L7.586 12l-2.293 2.293a1 1 0 001.414 1.414L8.586 14l2.293 2.293a1 1 0 001.414-1.414L9.414 12l2.293-2.293z" clip-rule="evenodd" />
-					</svg>
+					<TriangleAlert class="h-5 w-5 text-red-400" aria-hidden="true" />
 				</div>
 				<div class="ml-3">
 					<p class="text-sm font-medium text-red-800">{errorMessage}</p>
@@ -290,9 +352,7 @@
 		<div class="rounded-md bg-yellow-50 p-4">
 			<div class="flex">
 				<div class="flex-shrink-0">
-					<svg class="h-5 w-5 text-yellow-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-						<path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.981-1.742 2.981H4.42c-1.53 0-2.493-1.647-1.743-2.981l5.58-9.92zM11 13a1 1 0 10-2 0v2a1 1 0 102 0v-2zm-1-8a1 1 0 100 2 1 1 0 000-2z" clip-rule="evenodd" />
-					</svg>
+					<TriangleAlert class="h-5 w-5 text-yellow-400" aria-hidden="true" />
 				</div>
 				<div class="ml-3">
 					<p class="text-sm font-medium text-yellow-800">No nodes found</p>
@@ -305,6 +365,22 @@
 		<div class="text-center text-gray-500">Loading nodes...</div>
 	{/if}
 
+	<!-- Quick status alive / dead / pending -->
+	<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+		<div class="rounded-lg bg-sky-50 p-4 shadow-sm ring-1 ring-sky-100">
+			<div class="text-sm font-medium text-sky-700">Total Nodes</div>
+			<div class="mt-1 text-2xl font-bold text-sky-900">{nodes.length}</div>
+		</div>
+		<div class="rounded-lg bg-emerald-50 p-4 shadow-sm ring-1 ring-emerald-100">
+			<div class="text-sm font-medium text-emerald-700">Active Nodes</div>
+			<div class="mt-1 text-2xl font-bold text-emerald-900">{activeNodes}</div>
+		</div>
+		<div class="rounded-lg bg-amber-50 p-4 shadow-sm ring-1 ring-amber-100">
+			<div class="text-sm font-medium text-amber-700">Inactive Nodes</div>
+			<div class="mt-1 text-2xl font-bold text-amber-900">{inactiveNodes}</div>
+		</div>
+	</div>
+	
 	<!-- Node selector -->
 	{#if nodes.length > 0}
 		<div>
@@ -326,8 +402,39 @@
 	<!-- If there is a selected node -->
 	{#if selectedNode}
 		<section class="space-y-4">
-			<!-- Graph for cpu and ram -->
-			<div class="grid grid-cols-2 gap-4">
+			<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+				<div class="rounded-lg bg-cyan-50 p-4 shadow-sm ring-1 ring-cyan-100">
+					<div class="text-sm font-medium text-cyan-700">Current CPU</div>
+					<div class="mt-1 text-2xl font-bold text-cyan-900">
+						{selectedNodeCpuPercent === null ? "n/a" : `${selectedNodeCpuPercent.toFixed(1)}%`}
+					</div>
+				</div>
+				<div class="rounded-lg bg-emerald-50 p-4 shadow-sm ring-1 ring-emerald-100">
+					<div class="text-sm font-medium text-emerald-700">Current Memory</div>
+					<div class="mt-1 text-2xl font-bold text-emerald-900">
+						{selectedNodeMemPercent === null ? "n/a" : `${selectedNodeMemPercent.toFixed(1)}%`}
+					</div>
+					{#if selectedNodeLatestMetric}
+						<div class="mt-1 text-xs text-emerald-800">
+							{formatBytes(selectedNodeLatestMetric.memUsed)} / {formatBytes(selectedNodeLatestMetric.memTotal)}
+						</div>
+					{/if}
+				</div>
+				<div class="rounded-lg bg-amber-50 p-4 shadow-sm ring-1 ring-amber-100">
+					<div class="text-sm font-medium text-amber-700">Current Disk</div>
+					<div class="mt-1 text-2xl font-bold text-amber-900">
+						{selectedNodeDiskPercent === null ? "n/a" : `${selectedNodeDiskPercent.toFixed(1)}%`}
+					</div>
+					{#if selectedNodeLatestMetric}
+						<div class="mt-1 text-xs text-amber-800">
+							{formatBytes(selectedNodeLatestMetric.diskUsed)} / {formatBytes(selectedNodeLatestMetric.diskTotal)}
+						</div>
+					{/if}
+				</div>
+			</div>
+
+			<!-- Graphs -->
+			<div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
 				<MetricLineChart
 					title="CPU Usage"
 					values={cpuSeries}
@@ -346,6 +453,27 @@
 					width={CHART_WIDTH}
 					height={CHART_HEIGHT}
 				/>
+				<MetricLineChart
+					title="Disk Usage"
+					values={diskSeries}
+					timestamps={timeSeries}
+					stroke="#f59e0b"
+					yDomain={[0, 100]}
+					width={CHART_WIDTH}
+					height={CHART_HEIGHT}
+				/>
+				<MetricLineChart
+					title="Network Throughput (B/s)"
+					values={netRxRateSeries}
+					seriesLabel="RX Throughput"
+					secondaryValues={netTxRateSeries}
+					secondaryLabel="TX Throughput"
+					secondaryStroke="#ec4899"
+					timestamps={timeSeries}
+					stroke="#6366f1"
+					width={CHART_WIDTH}
+					height={CHART_HEIGHT}
+				/>
 			</div>
 			<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
 				<div class="rounded-lg bg-sky-50 p-4 shadow-sm ring-1 ring-sky-100">
@@ -359,6 +487,16 @@
 				<div class="rounded-lg bg-amber-50 p-4 shadow-sm ring-1 ring-amber-100">
 					<div class="text-sm font-medium text-amber-700">Publishes</div>
 					<div class="mt-1 text-2xl font-bold text-amber-900">{selectedNode.publishCount ?? "n/a"}</div>
+				</div>
+			</div>
+			<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+				<div class="rounded-lg bg-indigo-50 p-4 shadow-sm ring-1 ring-indigo-100">
+					<div class="text-sm font-medium text-indigo-700">Current RX Throughput</div>
+					<div class="mt-1 text-2xl font-bold text-indigo-900">{formatBytesPerSecond(selectedNodeNetRxRate ?? undefined)}</div>
+				</div>
+				<div class="rounded-lg bg-pink-50 p-4 shadow-sm ring-1 ring-pink-100">
+					<div class="text-sm font-medium text-pink-700">Current TX Throughput</div>
+					<div class="mt-1 text-2xl font-bold text-pink-900">{formatBytesPerSecond(selectedNodeNetTxRate ?? undefined)}</div>
 				</div>
 			</div>
 			<div class="rounded-lg bg-indigo-50 p-4 shadow-sm ring-1 ring-indigo-100">
