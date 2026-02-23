@@ -12,7 +12,7 @@ function resolveNodesWsUrl() {
   }
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.hostname}:3001/ws/nodes`;
+  return `${protocol}//${window.location.host}/ws/nodes`;
 }
 
 export function connectLiveNodes<TNode>(

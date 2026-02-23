@@ -118,16 +118,23 @@
 		createdNodeId = "";
 		createdNodeToken = "";
 		createdNodeEnvFile = "";
+
+		const trimmedName = newNodeName.trim();
+		if (!trimmedName) {
+			createNodeError = "Node name is required";
+			return;
+		}
+
 		createNodeBusy = true;
 
 		try {
-			const response = await fetch("/api/nodes", {
+			const response = await fetch("/api/nodes/create", {
 				method: "POST",
 				headers: {
 					"content-type": "application/json",
 					authorization: `Bearer ${authToken}`
 				},
-				body: JSON.stringify({ name: newNodeName })
+				body: JSON.stringify({ name: trimmedName })
 			});
 			const data = await response.json();
 
