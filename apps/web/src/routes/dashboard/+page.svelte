@@ -305,6 +305,24 @@
 		<div class="text-center text-gray-500">Loading nodes...</div>
 	{/if}
 
+	<!-- Node selector -->
+	{#if nodes.length > 0}
+		<div>
+			<label for="node-select" class="block text-sm font-medium text-gray-700">Select Node</label>
+			<select
+				id="node-select"
+				class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-sky-500 focus:ring-sky-500 sm:text-sm"
+				bind:value={selectedNodeId}
+			>
+				{#each nodes as node}
+					<option value={node.id}>
+						{node.name ?? node.id} {isNodeActive(node) ? "(active)" : "(idle)"}
+					</option>
+				{/each}
+			</select>
+		</div>
+	{/if}
+
 	<!-- If there is a selected node -->
 	{#if selectedNode}
 		<section class="space-y-4">
