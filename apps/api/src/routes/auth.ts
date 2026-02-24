@@ -72,6 +72,53 @@ function parseStringArray(value: unknown) {
   return [...new Set(items)];
 }
 
+const nodeScopedPermissionPattern = /^node:(read|write):([a-zA-Z0-9_-]+)$/;
+
+function isSupportedDynamicPermissionCode(code: string) {
+  return nodeScopedPermissionPattern.test(code);
+}
+
+function dynamicPermissionDescription(code: string) {
+  const match = code.match(nodeScopedPermissionPattern);
+  if (!match) {
+    return undefined;
+  }
+
+  const action = match[1];
+  const nodeId = match[2];
+  return action === "read"
+    ? `Read access for node ${nodeId}`
+    : `Write access for node ${nodeId}`;
+}
+
+async function resolvePermissionIds(permissionCodes: string[]) {
+  let permissions = await RoleStore.listPermissions();
+  let permissionByCode = new Map(permissions.map((permission) => [permission.code, permission.id]));
+
+  const missingCodes = permissionCodes.filter((code) => !permissionByCode.has(code));
+  const unsupportedCodes = missingCodes.filter((code) => !isSupportedDynamicPermissionCode(code));
+  if (unsupportedCodes.length > 0) {
+    return {
+      error: { message: `unknown permissions: ${unsupportedCodes.join(", ")}` },
+      permissionIds: null,
+    };
+  }
+
+  for (const code of missingCodes) {
+    await RoleStore.ensurePermission(code, dynamicPermissionDescription(code));
+  }
+
+  if (missingCodes.length > 0) {
+    permissions = await RoleStore.listPermissions();
+    permissionByCode = new Map(permissions.map((permission) => [permission.code, permission.id]));
+  }
+
+  return {
+    error: null,
+    permissionIds: permissionCodes.map((code) => permissionByCode.get(code) as string),
+  };
+}
+
 async function requireAdminSession(rawAuthorization?: string) {
   const bearerToken = readBearerToken(rawAuthorization);
   if (!bearerToken) {
@@ -90,6 +137,17 @@ async function requireAdminSession(rawAuthorization?: string) {
   }
 
   return { session, error: null };
+}
+
+function listEffectivePermissionCodes(session: NonNullable<Awaited<ReturnType<typeof SessionStore.findActiveSessionByTokenHash>>>) {
+  const permissions = new Set<string>();
+  for (const userRole of session.user.roles) {
+    for (const rolePermission of userRole.role.permissions) {
+      permissions.add(rolePermission.permission.code);
+    }
+  }
+
+  return [...permissions].sort((a, b) => a.localeCompare(b));
 }
 
 const authRoutes: FastifyPluginAsync = async (app) => {
@@ -207,6 +265,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       email: session.user.email,
       displayName: session.user.displayName,
       roles: session.user.roles.map((entry) => entry.role.name),
+      permissions: listEffectivePermissionCodes(session),
     };
   });
 
@@ -358,17 +417,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({ error: "permissionCodes must be an array of strings" });
       }
 
-      const permissions = await RoleStore.listPermissions();
-      const permissionByCode = new Map(permissions.map((permission) => [permission.code, permission.id]));
-      const missingCodes = permissionCodes.filter((code) => !permissionByCode.has(code));
-      if (missingCodes.length > 0) {
-        return reply.status(400).send({ error: `unknown permissions: ${missingCodes.join(", ")}` });
+      const resolvedPermissions = await resolvePermissionIds(permissionCodes);
+      if (resolvedPermissions.error) {
+        return reply.status(400).send({ error: resolvedPermissions.error.message });
       }
 
-      await RoleStore.replaceRolePermissions(
-        role.id,
-        permissionCodes.map((code) => permissionByCode.get(code) as string)
-      );
+      await RoleStore.replaceRolePermissions(role.id, resolvedPermissions.permissionIds);
     }
 
     const roles = await RoleStore.listRolesWithPermissions();
@@ -406,17 +460,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ error: "role not found" });
     }
 
-    const permissions = await RoleStore.listPermissions();
-    const permissionByCode = new Map(permissions.map((permission) => [permission.code, permission.id]));
-    const missingCodes = permissionCodes.filter((code) => !permissionByCode.has(code));
-    if (missingCodes.length > 0) {
-      return reply.status(400).send({ error: `unknown permissions: ${missingCodes.join(", ")}` });
+    const resolvedPermissions = await resolvePermissionIds(permissionCodes);
+    if (resolvedPermissions.error) {
+      return reply.status(400).send({ error: resolvedPermissions.error.message });
     }
 
-    await RoleStore.replaceRolePermissions(
-      role.id,
-      permissionCodes.map((code) => permissionByCode.get(code) as string)
-    );
+    await RoleStore.replaceRolePermissions(role.id, resolvedPermissions.permissionIds);
 
     const refreshedRoles = await RoleStore.listRolesWithPermissions();
     return {

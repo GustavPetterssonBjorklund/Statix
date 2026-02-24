@@ -4,6 +4,7 @@ const PERMISSIONS = [
   { code: "health:read", description: "Read service and database health" },
   { code: "nodes:read", description: "Read node data" },
   { code: "nodes:create", description: "Create nodes" },
+  { code: "nodes:delete", description: "Delete nodes" },
   { code: "users:create", description: "Create allowed user accounts" },
   { code: "users:read", description: "Read user account metadata" },
   { code: "roles:assign", description: "Assign roles to users" },

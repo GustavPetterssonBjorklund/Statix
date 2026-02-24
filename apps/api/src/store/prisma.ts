@@ -108,6 +108,28 @@ export namespace NodeStore {
     }
   }
 
+  export async function updateNameById(nodeId: string, name: string | null) {
+    try {
+      return await prisma.node.update({
+        where: { id: nodeId },
+        data: {
+          name,
+        },
+        select: {
+          id: true,
+          name: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   export async function rotateMqttCredentials(changeset: {
     nodeId: string;
     username: string;
@@ -450,6 +472,24 @@ export namespace UserStore {
 }
 
 export namespace RoleStore {
+  export async function ensurePermission(code: string, description?: string) {
+    return prisma.permission.upsert({
+      where: { code },
+      update: {
+        description: description ?? null,
+      },
+      create: {
+        code,
+        description: description ?? null,
+      },
+      select: {
+        id: true,
+        code: true,
+        description: true,
+      },
+    });
+  }
+
   export async function ensureRole(name: string, description?: string) {
     return prisma.role.upsert({
       where: { name },
@@ -676,7 +716,19 @@ export namespace SessionStore {
           include: {
             roles: {
               include: {
-                role: true,
+                role: {
+                  include: {
+                    permissions: {
+                      include: {
+                        permission: {
+                          select: {
+                            code: true,
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
               },
             },
           },
