@@ -16,6 +16,26 @@ function readBearerToken(rawHeader?: string) {
   return token;
 }
 
+async function requireAdminFromAuthorization(authHeader?: string) {
+  const bearerToken = readBearerToken(authHeader);
+  if (!bearerToken) {
+    return { error: { status: 401, body: { error: "missing bearer token" } } };
+  }
+
+  const sessionTokenHash = await Passwords.hashToken(bearerToken);
+  const session = await SessionStore.findActiveSessionByTokenHash(sessionTokenHash);
+  if (!session) {
+    return { error: { status: 401, body: { error: "invalid session" } } };
+  }
+
+  const isAdmin = session.user.roles.some((entry) => entry.role.name === "admin");
+  if (!isAdmin) {
+    return { error: { status: 403, body: { error: "admin role required" } } };
+  }
+
+  return { error: null };
+}
+
 const nodeRoutes: FastifyPluginAsync = async (app) => {
   app.get("/nodes", async () => {
     const nodes = await listNodes();
@@ -39,20 +59,9 @@ const nodeRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/nodes/create", async (request, reply) => {
-    const bearerToken = readBearerToken(request.headers.authorization);
-    if (!bearerToken) {
-      return reply.status(401).send({ error: "missing bearer token" });
-    }
-
-    const sessionTokenHash = await Passwords.hashToken(bearerToken);
-    const session = await SessionStore.findActiveSessionByTokenHash(sessionTokenHash);
-    if (!session) {
-      return reply.status(401).send({ error: "invalid session" });
-    }
-
-    const isAdmin = session.user.roles.some((entry) => entry.role.name === "admin");
-    if (!isAdmin) {
-      return reply.status(403).send({ error: "admin role required" });
+    const authResult = await requireAdminFromAuthorization(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
     }
 
     const body = request.body as { name?: unknown } | undefined;
@@ -89,6 +98,27 @@ const nodeRoutes: FastifyPluginAsync = async (app) => {
       token: nodeToken.token,
       envFile,
     });
+  });
+
+  app.delete("/nodes/:nodeId", async (request, reply) => {
+    const authResult = await requireAdminFromAuthorization(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const params = request.params as { nodeId?: string } | undefined;
+    const nodeId = params?.nodeId?.trim();
+    if (!nodeId) {
+      return reply.status(400).send({ error: "nodeId is required" });
+    }
+
+    const deleted = await NodeStore.deleteById(nodeId);
+    if (!deleted) {
+      return reply.status(404).send({ error: "node not found" });
+    }
+
+    markNodesChanged();
+    return reply.status(204).send();
   });
 
   app.post("/nodes/auth/exchange", async (request, reply) => {

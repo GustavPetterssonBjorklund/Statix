@@ -95,6 +95,8 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        PUBLIC_NODES_WS_URL: ${PUBLIC_NODES_WS_URL}
     image: statix-web:local
     container_name: statix-web
     restart: unless-stopped
@@ -103,9 +105,10 @@ services:
         condition: service_started
     environment:
       API_BASE_URL: ${API_BASE_URL:-http://server:3001}
+      PUBLIC_NODES_WS_URL: ${PUBLIC_NODES_WS_URL}
       HOST: 0.0.0.0
       PORT: ${WEB_PORT:-3000}
-      ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      ORIGIN: ${WEB_ORIGIN}
     ports:
       - "${WEB_PORT:-3000}:3000"
     networks:

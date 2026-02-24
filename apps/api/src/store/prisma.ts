@@ -94,6 +94,20 @@ export namespace NodeStore {
     });
   }
 
+  export async function deleteById(nodeId: string) {
+    try {
+      await prisma.node.delete({
+        where: { id: nodeId },
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   export async function rotateMqttCredentials(changeset: {
     nodeId: string;
     username: string;
