@@ -30,6 +30,7 @@ COPY --from=build /repo/apps/api/node_modules /app/apps/api/node_modules
 COPY --from=build /repo/apps/api/package.json /app/apps/api/package.json
 COPY --from=build /repo/apps/api/dist /app/apps/api/dist
 COPY --from=build /repo/apps/api/prisma /app/apps/api/prisma
+COPY --from=build /repo/apps/api/version.json /app/apps/api/version.json
 COPY --from=build /repo/packages/shared/dist /app/packages/shared/dist
 COPY --from=build /repo/packages/shared/package.json /app/packages/shared/package.json
 COPY --from=build /repo/packages/shared/node_modules /app/packages/shared/node_modules

@@ -48,6 +48,12 @@
 		return { response, data };
 	}
 
+	async function redirectToLogin() {
+		clearAuthToken();
+		authToken = "";
+		await goto("/login");
+	}
+
 	onMount(() => {
 		let stopLiveNodes = () => {};
 
@@ -83,6 +89,10 @@
 				]);
 
 				if (!nodesResult.response.ok) {
+					if (nodesResult.response.status === 401) {
+						await redirectToLogin();
+						return;
+					}
 					errorMessage = "Failed to load nodes";
 					return;
 				}
@@ -143,6 +153,10 @@
 			const data = await response.json();
 
 			if (!response.ok) {
+				if (response.status === 401) {
+					await redirectToLogin();
+					return;
+				}
 				createNodeError = data?.error ?? "Failed to create node";
 				return;
 			}

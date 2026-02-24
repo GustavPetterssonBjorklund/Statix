@@ -282,6 +282,12 @@
 	$: selectedNodeNetTxRate =
 		netTxRateSeries.length > 0 ? netTxRateSeries[netTxRateSeries.length - 1] : null;
 
+	async function redirectToLogin() {
+		clearAuthToken();
+		authToken = "";
+		await goto("/login");
+	}
+
 	async function loadSelectedNodeHistory() {
 		if (!selectedNodeId) {
 			selectedNodeHistory = [];
@@ -298,6 +304,9 @@
 			});
 			const data = await response.json();
 			if (!response.ok) {
+				if (response.status === 401) {
+					await redirectToLogin();
+				}
 				return;
 			}
 			selectedNodeHistory = Array.isArray(data?.metrics) ? data.metrics : [];
@@ -335,6 +344,10 @@
 				const data = await response.json();
 
 				if (!response.ok) {
+					if (response.status === 401) {
+						await redirectToLogin();
+						return;
+					}
 					errorMessage = data?.error ?? "Failed to load nodes";
 					return;
 				}
