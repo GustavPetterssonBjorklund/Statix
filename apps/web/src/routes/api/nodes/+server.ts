@@ -3,9 +3,13 @@ import { json, type RequestHandler } from "@sveltejs/kit";
 
 const apiBaseUrl = env.API_BASE_URL ?? "http://localhost:3001";
 
-export const GET: RequestHandler = async ({ fetch }) => {
+export const GET: RequestHandler = async ({ fetch, request }) => {
+  const authHeader = request.headers.get("authorization");
+
   try {
-    const response = await fetch(`${apiBaseUrl}/nodes`);
+    const response = await fetch(`${apiBaseUrl}/nodes`, {
+      headers: authHeader ? { authorization: authHeader } : {},
+    });
     const text = await response.text();
 
     if (!response.ok) {

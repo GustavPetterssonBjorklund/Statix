@@ -74,7 +74,11 @@
 
 			try {
 				const [nodesResult, bootstrapResult] = await Promise.all([
-					fetchJson("/api/nodes"),
+					fetchJson("/api/nodes", {
+						headers: {
+							authorization: `Bearer ${token}`
+						}
+					}),
 					fetchJson("/api/auth/bootstrap/status")
 				]);
 

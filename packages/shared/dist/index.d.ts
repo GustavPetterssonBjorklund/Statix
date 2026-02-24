@@ -5,6 +5,8 @@ export declare const MetricsSchema: z.ZodObject<{
     cpu: z.ZodNumber;
     mem_used: z.ZodNumber;
     mem_total: z.ZodNumber;
+    mem_cached: z.ZodOptional<z.ZodNumber>;
+    mem_available: z.ZodOptional<z.ZodNumber>;
     disk_used: z.ZodNumber;
     disk_total: z.ZodNumber;
     net_rx: z.ZodNumber;

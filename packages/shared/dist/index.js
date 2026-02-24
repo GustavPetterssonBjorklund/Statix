@@ -5,6 +5,8 @@ export const MetricsSchema = z.object({
     cpu: z.number().min(0).max(1),
     mem_used: z.number().nonnegative(),
     mem_total: z.number().positive(),
+    mem_cached: z.number().nonnegative().optional(),
+    mem_available: z.number().nonnegative().optional(),
     disk_used: z.number().nonnegative(),
     disk_total: z.number().positive(),
     net_rx: z.number().nonnegative(),

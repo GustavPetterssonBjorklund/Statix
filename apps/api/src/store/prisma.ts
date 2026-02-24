@@ -22,6 +22,8 @@ export async function listNodes() {
           cpu: true,
           memUsed: true,
           memTotal: true,
+          memCached: true,
+          memAvailable: true,
           diskUsed: true,
           diskTotal: true,
           netRx: true,
@@ -57,6 +59,10 @@ export async function listNodes() {
           cpu: node.metrics[0].cpu,
           memUsed: Number(node.metrics[0].memUsed),
           memTotal: Number(node.metrics[0].memTotal),
+          memCached:
+            typeof node.metrics[0].memCached === "bigint" ? Number(node.metrics[0].memCached) : null,
+          memAvailable:
+            typeof node.metrics[0].memAvailable === "bigint" ? Number(node.metrics[0].memAvailable) : null,
           diskUsed: Number(node.metrics[0].diskUsed),
           diskTotal: Number(node.metrics[0].diskTotal),
           netRx: Number(node.metrics[0].netRx),
@@ -169,6 +175,13 @@ function toBigInt(value: number) {
   return BigInt(Math.trunc(value));
 }
 
+function toOptionalBigInt(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return BigInt(Math.trunc(value));
+}
+
 export namespace MetricStore {
   export async function appendNodeMetric(nodeId: string, payload: MetricsPayload) {
     const tsValue = toBigInt(payload.ts);
@@ -182,6 +195,8 @@ export namespace MetricStore {
           cpu: payload.cpu,
           memUsed: toBigInt(payload.mem_used),
           memTotal: toBigInt(payload.mem_total),
+          memCached: toOptionalBigInt(payload.mem_cached),
+          memAvailable: toOptionalBigInt(payload.mem_available),
           diskUsed: toBigInt(payload.disk_used),
           diskTotal: toBigInt(payload.disk_total),
           netRx: toBigInt(payload.net_rx),
@@ -212,6 +227,8 @@ export namespace MetricStore {
         cpu: true,
         memUsed: true,
         memTotal: true,
+        memCached: true,
+        memAvailable: true,
         diskUsed: true,
         diskTotal: true,
         netRx: true,
@@ -227,6 +244,8 @@ export namespace MetricStore {
         cpu: row.cpu,
         memUsed: Number(row.memUsed),
         memTotal: Number(row.memTotal),
+        memCached: typeof row.memCached === "bigint" ? Number(row.memCached) : null,
+        memAvailable: typeof row.memAvailable === "bigint" ? Number(row.memAvailable) : null,
         diskUsed: Number(row.diskUsed),
         diskTotal: Number(row.diskTotal),
         netRx: Number(row.netRx),

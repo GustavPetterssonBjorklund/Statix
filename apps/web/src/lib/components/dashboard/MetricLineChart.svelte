@@ -5,7 +5,10 @@
 	type LineChart = {
 		path: string;
 		secondaryPath: string;
+		tertiaryPath: string;
 		areaPath: string;
+		secondaryAreaPath: string;
+		tertiaryAreaPath: string;
 		xTicks: Array<{ x: number; label: string }>;
 		yTicks: Array<{ y: number; label: string; value: number }>;
 		plotTop: number;
@@ -18,6 +21,9 @@
 		secondaryLastX: number;
 		secondaryLastY: number;
 		secondaryLastValue: number | null;
+		tertiaryLastX: number;
+		tertiaryLastY: number;
+		tertiaryLastValue: number | null;
 	};
 
 	let {
@@ -31,7 +37,11 @@
 		seriesLabel,
 		secondaryValues = [],
 		secondaryStroke,
-		secondaryLabel
+		secondaryLabel,
+		tertiaryValues = [],
+		tertiaryStroke,
+		tertiaryLabel,
+		stacked = false
 	} =
 		$props<{
 			title: string;
@@ -45,6 +55,10 @@
 			secondaryValues?: number[];
 			secondaryStroke?: string;
 			secondaryLabel?: string;
+			tertiaryValues?: number[];
+			tertiaryStroke?: string;
+			tertiaryLabel?: string;
+			stacked?: boolean;
 		}>();
 
 	function isPercentDomain(domain?: [number, number]) {
@@ -73,10 +87,12 @@
 	function buildLineChart(
 		seriesValues: number[],
 		seriesValuesSecondary: number[],
+		seriesValuesTertiary: number[],
 		seriesTimes: number[],
 		chartWidth: number,
 		chartHeight: number,
-		fixedYDomain?: [number, number]
+		fixedYDomain?: [number, number],
+		useStackedSeries = false
 	): LineChart {
 		const margin = {
 			top: 10,
@@ -92,7 +108,10 @@
 			return {
 				path: "",
 				secondaryPath: "",
+				tertiaryPath: "",
 				areaPath: "",
+				secondaryAreaPath: "",
+				tertiaryAreaPath: "",
 				xTicks: [],
 				yTicks: [],
 				plotTop: margin.top,
@@ -105,11 +124,15 @@
 				secondaryLastX: margin.left,
 				secondaryLastY: margin.top + plotHeight,
 				secondaryLastValue: null,
+				tertiaryLastX: margin.left,
+				tertiaryLastY: margin.top + plotHeight,
+				tertiaryLastValue: null,
 			};
 		}
 
 		let safeValues = seriesValues;
 		let safeSecondaryValues = seriesValuesSecondary;
+		let safeTertiaryValues = seriesValuesTertiary;
 		let safeTimes = seriesTimes;
 
 		// ensure we can draw a line even with one point
@@ -119,6 +142,9 @@
 			safeTimes = [t - 1000, t];
 			if (safeSecondaryValues.length === 1) {
 				safeSecondaryValues = [safeSecondaryValues[0], safeSecondaryValues[0]];
+			}
+			if (safeTertiaryValues.length === 1) {
+				safeTertiaryValues = [safeTertiaryValues[0], safeTertiaryValues[0]];
 			}
 		}
 
@@ -130,12 +156,29 @@
 			.domain([new Date(minTime), new Date(paddedMaxTime)])
 			.range([margin.left, margin.left + plotWidth]);
 
+		const stackedSecondaryValues =
+			useStackedSeries && safeSecondaryValues.length > 0
+				? safeValues.map((v, i) => v + (safeSecondaryValues[i] ?? 0))
+				: safeSecondaryValues;
+		const stackedTertiaryValues =
+			useStackedSeries && safeTertiaryValues.length > 0
+				? safeValues.map((v, i) => v + (safeSecondaryValues[i] ?? 0) + (safeTertiaryValues[i] ?? 0))
+				: safeTertiaryValues;
+
 		const computedYDomain: [number, number] =
 			Array.isArray(fixedYDomain) && fixedYDomain.length === 2
 				? [Math.min(fixedYDomain[0], fixedYDomain[1]), Math.max(fixedYDomain[0], fixedYDomain[1])]
 				: [
-					Math.min(...safeValues, ...(safeSecondaryValues.length > 0 ? safeSecondaryValues : [])),
-					Math.max(...safeValues, ...(safeSecondaryValues.length > 0 ? safeSecondaryValues : [])),
+					Math.min(
+						...safeValues,
+						...(stackedSecondaryValues.length > 0 ? stackedSecondaryValues : []),
+						...(stackedTertiaryValues.length > 0 ? stackedTertiaryValues : [])
+					),
+					Math.max(
+						...safeValues,
+						...(stackedSecondaryValues.length > 0 ? stackedSecondaryValues : []),
+						...(stackedTertiaryValues.length > 0 ? stackedTertiaryValues : [])
+					),
 				];
 
 		// Avoid flatline domain
@@ -174,6 +217,16 @@
 			.y0(margin.top + plotHeight)
 			.y1((v) => yScale(v))
 			.curve(curveMonotoneX);
+		const stackedAreaGen = area<number>()
+			.x((_, i) => xScale(new Date(safeTimes[i] ?? paddedMaxTime)))
+			.y0((_, i) => yScale(safeValues[i] ?? 0))
+			.y1((v) => yScale(v))
+			.curve(curveMonotoneX);
+		const stackedTertiaryAreaGen = area<number>()
+			.x((_, i) => xScale(new Date(safeTimes[i] ?? paddedMaxTime)))
+			.y0((_, i) => yScale(stackedSecondaryValues[i] ?? 0))
+			.y1((v) => yScale(v))
+			.curve(curveMonotoneX);
 
 		const lastIndex = Math.max(0, seriesValues.length - 1);
 		const lastValue = seriesValues[lastIndex] ?? null;
@@ -181,11 +234,23 @@
 		const secondaryLastIndex = Math.max(0, seriesValuesSecondary.length - 1);
 		const secondaryLastValue = seriesValuesSecondary[secondaryLastIndex] ?? null;
 		const secondaryLastTime = seriesTimes[secondaryLastIndex] ?? paddedMaxTime;
+		const tertiaryLastIndex = Math.max(0, seriesValuesTertiary.length - 1);
+		const tertiaryLastValue = seriesValuesTertiary[tertiaryLastIndex] ?? null;
+		const tertiaryLastTime = seriesTimes[tertiaryLastIndex] ?? paddedMaxTime;
 
 		return {
 			path: lineGen(safeValues) ?? "",
-			secondaryPath: safeSecondaryValues.length > 0 ? (lineGen(safeSecondaryValues) ?? "") : "",
+			secondaryPath: stackedSecondaryValues.length > 0 ? (lineGen(stackedSecondaryValues) ?? "") : "",
+			tertiaryPath: stackedTertiaryValues.length > 0 ? (lineGen(stackedTertiaryValues) ?? "") : "",
 			areaPath: areaGen(safeValues) ?? "",
+			secondaryAreaPath:
+				useStackedSeries && stackedSecondaryValues.length > 0
+					? (stackedAreaGen(stackedSecondaryValues) ?? "")
+					: "",
+			tertiaryAreaPath:
+				useStackedSeries && stackedTertiaryValues.length > 0
+					? (stackedTertiaryAreaGen(stackedTertiaryValues) ?? "")
+					: "",
 			xTicks,
 			yTicks,
 			plotTop: margin.top,
@@ -198,6 +263,9 @@
 			secondaryLastX: xScale(new Date(secondaryLastTime)),
 			secondaryLastY: secondaryLastValue == null ? margin.top + plotHeight : yScale(secondaryLastValue),
 			secondaryLastValue,
+			tertiaryLastX: xScale(new Date(tertiaryLastTime)),
+			tertiaryLastY: tertiaryLastValue == null ? margin.top + plotHeight : yScale(tertiaryLastValue),
+			tertiaryLastValue,
 		};
 	}
 
@@ -209,21 +277,35 @@
 		return { min, max, avg };
 	}
 
-	const chart = $derived(buildLineChart(values, secondaryValues, timestamps, width, height, yDomain));
+	const chart = $derived(
+		buildLineChart(values, secondaryValues, tertiaryValues, timestamps, width, height, yDomain, stacked)
+	);
 	const summary = $derived(summarizeSeries(values));
 	const secondarySummary = $derived(summarizeSeries(secondaryValues));
+	const tertiarySummary = $derived(summarizeSeries(tertiaryValues));
 	const gradientId = $derived(`line-gradient-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
 	const isPct = $derived(isPercentDomain(yDomain));
 	const primaryLegendLabel = $derived(seriesLabel ?? title);
 	const lastLabel = $derived(
-		chart.lastValue == null ? "—" : isPct ? `${chart.lastValue.toFixed(0)}%` : formatY(chart.lastValue, yDomain)
-	);
-	const secondaryLastLabel = $derived(
-		chart.secondaryLastValue == null
+		values.length === 0
 			? "—"
 			: isPct
-				? `${chart.secondaryLastValue.toFixed(0)}%`
-				: formatY(chart.secondaryLastValue, yDomain)
+				? `${(values[values.length - 1] ?? 0).toFixed(0)}%`
+				: formatY(values[values.length - 1] ?? 0, yDomain)
+	);
+	const secondaryLastLabel = $derived(
+		secondaryValues.length === 0
+			? "—"
+			: isPct
+				? `${(secondaryValues[secondaryValues.length - 1] ?? 0).toFixed(0)}%`
+				: formatY(secondaryValues[secondaryValues.length - 1] ?? 0, yDomain)
+	);
+	const tertiaryLastLabel = $derived(
+		tertiaryValues.length === 0
+			? "—"
+			: isPct
+				? `${(tertiaryValues[tertiaryValues.length - 1] ?? 0).toFixed(0)}%`
+				: formatY(tertiaryValues[tertiaryValues.length - 1] ?? 0, yDomain)
 	);
 </script>
 
@@ -255,6 +337,18 @@
 				<stop offset="0%" stop-color={stroke} stop-opacity="0.18" />
 				<stop offset="100%" stop-color={stroke} stop-opacity="0" />
 			</linearGradient>
+			{#if secondaryStroke}
+				<linearGradient id={`${gradientId}-secondary-area`} x1="0%" y1="0%" x2="0%" y2="100%">
+					<stop offset="0%" stop-color={secondaryStroke} stop-opacity="0.16" />
+					<stop offset="100%" stop-color={secondaryStroke} stop-opacity="0.04" />
+				</linearGradient>
+			{/if}
+			{#if tertiaryStroke}
+				<linearGradient id={`${gradientId}-tertiary-area`} x1="0%" y1="0%" x2="0%" y2="100%">
+					<stop offset="0%" stop-color={tertiaryStroke} stop-opacity="0.16" />
+					<stop offset="100%" stop-color={tertiaryStroke} stop-opacity="0.04" />
+				</linearGradient>
+			{/if}
 		</defs>
 
 		<!-- Grid (Y) -->
@@ -319,11 +413,20 @@
 
 		<!-- Area under curve (subtle, improves readability) -->
 		<path d={chart.areaPath} fill={`url(#${gradientId}-area)`} />
+		{#if chart.secondaryAreaPath && secondaryStroke}
+			<path d={chart.secondaryAreaPath} fill={`url(#${gradientId}-secondary-area)`} />
+		{/if}
+		{#if chart.tertiaryAreaPath && tertiaryStroke}
+			<path d={chart.tertiaryAreaPath} fill={`url(#${gradientId}-tertiary-area)`} />
+		{/if}
 
 		<!-- Line -->
 		<path d={chart.path} fill="none" stroke={`url(#${gradientId})`} stroke-width="2.75" />
 		{#if chart.secondaryPath && secondaryStroke}
 			<path d={chart.secondaryPath} fill="none" stroke={secondaryStroke} stroke-width="2.25" />
+		{/if}
+		{#if chart.tertiaryPath && tertiaryStroke}
+			<path d={chart.tertiaryPath} fill="none" stroke={tertiaryStroke} stroke-width="2.25" />
 		{/if}
 
 		<!-- Last point marker -->
@@ -333,6 +436,9 @@
 		{/if}
 		{#if chart.secondaryLastValue !== null && secondaryStroke}
 			<circle cx={chart.secondaryLastX} cy={chart.secondaryLastY} r="3" fill={secondaryStroke} />
+		{/if}
+		{#if chart.tertiaryLastValue !== null && tertiaryStroke}
+			<circle cx={chart.tertiaryLastX} cy={chart.tertiaryLastY} r="3" fill={tertiaryStroke} />
 		{/if}
 	</svg>
 
@@ -344,6 +450,10 @@
 			{#if secondaryStroke && secondaryLabel}
 				<span class="ml-2 h-2.5 w-6 rounded-sm" style={`background:${secondaryStroke}`}></span>
 				<span class="font-medium text-zinc-800">{secondaryLabel}</span>
+			{/if}
+			{#if tertiaryStroke && tertiaryLabel}
+				<span class="ml-2 h-2.5 w-6 rounded-sm" style={`background:${tertiaryStroke}`}></span>
+				<span class="font-medium text-zinc-800">{tertiaryLabel}</span>
 			{/if}
 		</div>
 
@@ -358,6 +468,13 @@
 				<span class="rounded-md bg-zinc-50 px-2 py-1 font-semibold text-zinc-900">{secondaryLastLabel}</span>
 				<span class="text-zinc-500">
 					range {formatY(secondarySummary.min, yDomain)}–{formatY(secondarySummary.max, yDomain)}
+				</span>
+			{/if}
+			{#if tertiaryStroke && tertiaryLabel}
+				<span class="text-zinc-600">{tertiaryLabel}</span>
+				<span class="rounded-md bg-zinc-50 px-2 py-1 font-semibold text-zinc-900">{tertiaryLastLabel}</span>
+				<span class="text-zinc-500">
+					range {formatY(tertiarySummary.min, yDomain)}–{formatY(tertiarySummary.max, yDomain)}
 				</span>
 			{/if}
 		</div>

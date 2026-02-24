@@ -30,6 +30,8 @@
 			cpu: number;
 			memUsed: number;
 			memTotal: number;
+			memCached: number | null;
+			memAvailable: number | null;
 			diskUsed: number;
 			diskTotal: number;
 			netRx: number;
@@ -66,6 +68,8 @@
 		cpu: number;
 		memUsed: number;
 		memTotal: number;
+		memCached: number | null;
+		memAvailable: number | null;
 		diskUsed: number;
 		diskTotal: number;
 		netRx: number;
@@ -76,6 +80,7 @@
 	let isLoading = true;
 	let errorMessage = "";
 	let currentUser: AuthUser | null = null;
+	let authToken = "";
 	let selectedNodeId = "";
 	let selectedNodeHistory: NodeMetricPoint[] = [];
 	const ACTIVE_WINDOW_MS = 2 * 60 * 1000;
@@ -159,6 +164,18 @@
 		return Math.max(0, Math.min(100, (part / total) * 100));
 	}
 
+	function memoryUsedNoCacheBytes(used: number | undefined, cached: number | null | undefined) {
+		if (typeof used !== "number" || !Number.isFinite(used) || used < 0) {
+			return null;
+		}
+
+		if (typeof cached !== "number" || !Number.isFinite(cached) || cached < 0) {
+			return used;
+		}
+
+		return Math.max(0, used - cached);
+	}
+
 	function buildRateSeries(values: number[], timestamps: number[]) {
 		if (values.length === 0 || timestamps.length === 0) {
 			return [];
@@ -228,7 +245,15 @@
 	$: selectedNodeSystemInfo = selectedNode?.systemInfo?.info ?? null;
 	$: selectedNodeSystemReportedMs = selectedNode?.systemInfo?.reportedTs ?? null;
 	$: cpuSeries = selectedNodeHistory.map((point) => point.cpu * 100);
-	$: memSeries = selectedNodeHistory.map((point) => percentValue(point.memUsed, point.memTotal));
+	$: memUsedSeries = selectedNodeHistory.map((point) =>
+		percentValue(memoryUsedNoCacheBytes(point.memUsed, point.memCached) ?? 0, point.memTotal)
+	);
+	$: memCachedSeries = selectedNodeHistory.map((point) =>
+		percentValue(point.memCached ?? 0, point.memTotal)
+	);
+	$: memAvailableSeries = selectedNodeHistory.map((point) =>
+		percentValue(point.memAvailable ?? 0, point.memTotal)
+	);
 	$: timeSeries = selectedNodeHistory.map((point) => point.ts);
 	$: diskSeries = selectedNodeHistory.map((point) => percentValue(point.diskUsed, point.diskTotal));
 	$: netRxCounterSeries = selectedNodeHistory.map((point) => point.netRx);
@@ -241,7 +266,13 @@
 			? Math.max(0, Math.min(100, selectedNodeLatestMetric.cpu * 100))
 			: null;
 	$: selectedNodeMemPercent = selectedNodeLatestMetric
-		? percentValue(selectedNodeLatestMetric.memUsed, selectedNodeLatestMetric.memTotal)
+		? percentValue(
+				memoryUsedNoCacheBytes(selectedNodeLatestMetric.memUsed, selectedNodeLatestMetric.memCached) ?? 0,
+				selectedNodeLatestMetric.memTotal
+			)
+		: null;
+	$: selectedNodeMemUsedNoCache = selectedNodeLatestMetric
+		? memoryUsedNoCacheBytes(selectedNodeLatestMetric.memUsed, selectedNodeLatestMetric.memCached)
 		: null;
 	$: selectedNodeDiskPercent = selectedNodeLatestMetric
 		? percentValue(selectedNodeLatestMetric.diskUsed, selectedNodeLatestMetric.diskTotal)
@@ -258,7 +289,13 @@
 		}
 
 		try {
-			const response = await fetch(`/api/nodes/${selectedNodeId}/metrics?limit=60`);
+			const response = await fetch(`/api/nodes/${selectedNodeId}/metrics?limit=60`, {
+				headers: authToken
+					? {
+							authorization: `Bearer ${authToken}`
+						}
+					: {}
+			});
 			const data = await response.json();
 			if (!response.ok) {
 				return;
@@ -279,6 +316,7 @@
 				await goto("/login");
 				return;
 			}
+			authToken = token;
 
 			const user = await validateAuthToken(token);
 			if (!user) {
@@ -289,7 +327,11 @@
 			currentUser = user as AuthUser;
 
 			try {
-				const response = await fetch("/api/nodes");
+				const response = await fetch("/api/nodes", {
+					headers: {
+						authorization: `Bearer ${token}`
+					}
+				});
 				const data = await response.json();
 
 				if (!response.ok) {
@@ -445,8 +487,16 @@
 					height={CHART_HEIGHT}
 				/>
 				<MetricLineChart
-					title="Memory Usage"
-					values={memSeries}
+					title="Memory Breakdown"
+					values={memUsedSeries}
+					seriesLabel="Used"
+					secondaryValues={memCachedSeries}
+					secondaryLabel="Cached"
+					secondaryStroke="#eab308"
+					tertiaryValues={memAvailableSeries}
+					tertiaryLabel="Available"
+					tertiaryStroke="#22d3ee"
+					stacked={true}
 					timestamps={timeSeries}
 					stroke="#22c55e"
 					yDomain={[0, 100]}

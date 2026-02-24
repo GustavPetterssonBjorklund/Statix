@@ -203,6 +203,8 @@ model Metric {
   cpu       Float
   memUsed   BigInt   @map("mem_used")
   memTotal  BigInt   @map("mem_total")
+  memCached BigInt?  @map("mem_cached")
+  memAvailable BigInt? @map("mem_available")
   diskUsed  BigInt   @map("disk_used")
   diskTotal BigInt   @map("disk_total")
   netRx     BigInt   @map("net_rx")

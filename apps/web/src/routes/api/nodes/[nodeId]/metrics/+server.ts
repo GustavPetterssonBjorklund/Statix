@@ -3,12 +3,15 @@ import { json, type RequestHandler } from "@sveltejs/kit";
 
 const apiBaseUrl = env.API_BASE_URL ?? "http://localhost:3001";
 
-export const GET: RequestHandler = async ({ fetch, params, url }) => {
+export const GET: RequestHandler = async ({ fetch, params, request, url }) => {
   const nodeId = params.nodeId;
   const limit = url.searchParams.get("limit") ?? "60";
+  const authHeader = request.headers.get("authorization");
 
   try {
-    const response = await fetch(`${apiBaseUrl}/nodes/${nodeId}/metrics?limit=${encodeURIComponent(limit)}`);
+    const response = await fetch(`${apiBaseUrl}/nodes/${nodeId}/metrics?limit=${encodeURIComponent(limit)}`, {
+      headers: authHeader ? { authorization: authHeader } : {},
+    });
     const text = await response.text();
 
     if (!response.ok) {
