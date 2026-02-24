@@ -67,6 +67,26 @@ services:
     networks:
       - statix
 
+  seed:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: statix-server:local
+    container_name: statix-seed
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${APP_DATABASE_URL:-postgresql://statix:statix@db:5432/statix?schema=public}
+    command:
+      [
+        "/app/apps/api/node_modules/.bin/tsx",
+        "/app/apps/api/prisma/seed-prod.ts"
+      ]
+    networks:
+      - statix
+
   server:
     build:
       context: .
@@ -77,7 +97,7 @@ services:
     depends_on:
       mqtt:
         condition: service_started
-      migrate:
+      seed:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: ${APP_DATABASE_URL:-postgresql://statix:statix@db:5432/statix?schema=public}
