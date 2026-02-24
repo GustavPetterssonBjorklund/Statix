@@ -262,6 +262,29 @@ export namespace SystemInfoStore {
 }
 
 export namespace UserStore {
+  export async function listUsersWithRoles() {
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: "desc" },
+      include: {
+        roles: {
+          include: {
+            role: true,
+          },
+        },
+      },
+    });
+
+    return users.map((user) => ({
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      isDisabled: user.isDisabled,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+      roles: user.roles.map((entry) => entry.role.name),
+    }));
+  }
+
   export async function hasCredentialedAdmin() {
     const adminUser = await prisma.user.findFirst({
       where: {
@@ -447,6 +470,86 @@ export namespace RoleStore {
       },
       update: {},
       create: { userId, roleId },
+    });
+  }
+
+  export async function listPermissions() {
+    return prisma.permission.findMany({
+      orderBy: { code: "asc" },
+      select: {
+        id: true,
+        code: true,
+        description: true,
+      },
+    });
+  }
+
+  export async function listRolesWithPermissions() {
+    const roles = await prisma.role.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        permissions: {
+          include: {
+            permission: true,
+          },
+        },
+        _count: {
+          select: {
+            users: true,
+          },
+        },
+      },
+    });
+
+    return roles.map((role) => ({
+      id: role.id,
+      name: role.name,
+      description: role.description,
+      usersCount: role._count.users,
+      permissions: role.permissions.map((entry) => ({
+        code: entry.permission.code,
+        description: entry.permission.description,
+      })),
+    }));
+  }
+
+  export async function findRolesByNames(roleNames: string[]) {
+    return prisma.role.findMany({
+      where: { name: { in: roleNames } },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+  }
+
+  export async function replaceUserRoles(userId: string, roleIds: string[]) {
+    return prisma.$transaction(async (tx) => {
+      await tx.userRole.deleteMany({
+        where: { userId },
+      });
+
+      if (roleIds.length > 0) {
+        await tx.userRole.createMany({
+          data: roleIds.map((roleId) => ({ userId, roleId })),
+          skipDuplicates: true,
+        });
+      }
+    });
+  }
+
+  export async function replaceRolePermissions(roleId: string, permissionIds: string[]) {
+    return prisma.$transaction(async (tx) => {
+      await tx.rolePermission.deleteMany({
+        where: { roleId },
+      });
+
+      if (permissionIds.length > 0) {
+        await tx.rolePermission.createMany({
+          data: permissionIds.map((permissionId) => ({ roleId, permissionId })),
+          skipDuplicates: true,
+        });
+      }
     });
   }
 }

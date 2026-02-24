@@ -27,6 +27,12 @@ function normalizeEmail(email: string) {
 }
 
 const emailSchema = z.string().trim().email();
+const roleNameSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(48)
+  .regex(/^[a-z][a-z0-9:_-]*$/);
 
 function parseEmail(email: unknown) {
   const parsed = emailSchema.safeParse(email);
@@ -35,6 +41,55 @@ function parseEmail(email: unknown) {
   }
 
   return parsed.data;
+}
+
+function parseRoleName(name: unknown) {
+  const parsed = roleNameSchema.safeParse(name);
+  if (!parsed.success) {
+    return null;
+  }
+
+  return parsed.data;
+}
+
+function parseStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const items: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      return null;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    items.push(trimmed);
+  }
+
+  return [...new Set(items)];
+}
+
+async function requireAdminSession(rawAuthorization?: string) {
+  const bearerToken = readBearerToken(rawAuthorization);
+  if (!bearerToken) {
+    return { session: null, error: { status: 401, body: { error: "missing bearer token" } } };
+  }
+
+  const tokenHash = await Passwords.hashToken(bearerToken);
+  const session = await SessionStore.findActiveSessionByTokenHash(tokenHash);
+  if (!session) {
+    return { session: null, error: { status: 401, body: { error: "invalid session" } } };
+  }
+
+  const isAdmin = session.user.roles.some((entry) => entry.role.name === "admin");
+  if (!isAdmin) {
+    return { session: null, error: { status: 403, body: { error: "admin role required" } } };
+  }
+
+  return { session, error: null };
 }
 
 const authRoutes: FastifyPluginAsync = async (app) => {
@@ -167,20 +222,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/auth/users", async (request, reply) => {
-    const bearerToken = readBearerToken(request.headers.authorization);
-    if (!bearerToken) {
-      return reply.status(401).send({ error: "missing bearer token" });
-    }
-
-    const tokenHash = await Passwords.hashToken(bearerToken);
-    const session = await SessionStore.findActiveSessionByTokenHash(tokenHash);
-    if (!session) {
-      return reply.status(401).send({ error: "invalid session" });
-    }
-
-    const isAdmin = session.user.roles.some((entry) => entry.role.name === "admin");
-    if (!isAdmin) {
-      return reply.status(403).send({ error: "admin role required" });
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
     }
 
     const body = request.body as { email?: unknown; displayName?: unknown } | undefined;
@@ -209,6 +253,175 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       setupToken: setupToken.token,
       setupTokenExpiresAt: setupToken.expiresAt,
     });
+  });
+
+  app.get("/auth/users", async (request, reply) => {
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const users = await UserStore.listUsersWithRoles();
+    return { users };
+  });
+
+  app.get("/auth/roles", async (request, reply) => {
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const roles = await RoleStore.listRolesWithPermissions();
+    return { roles };
+  });
+
+  app.get("/auth/permissions", async (request, reply) => {
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const permissions = await RoleStore.listPermissions();
+    return { permissions };
+  });
+
+  app.post("/auth/users/:userId/roles", async (request, reply) => {
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const userId = (request.params as { userId?: string } | undefined)?.userId;
+    if (!userId) {
+      return reply.status(400).send({ error: "userId is required" });
+    }
+
+    const body = request.body as { roleNames?: unknown } | undefined;
+    const roleNames = parseStringArray(body?.roleNames);
+    if (!roleNames || roleNames.length === 0) {
+      return reply.status(400).send({ error: "at least one role is required" });
+    }
+
+    const user = await UserStore.findById(userId);
+    if (!user) {
+      return reply.status(404).send({ error: "user not found" });
+    }
+
+    const roles = await RoleStore.findRolesByNames(roleNames);
+    if (roles.length !== roleNames.length) {
+      const missing = roleNames.filter((name) => !roles.some((role) => role.name === name));
+      return reply.status(400).send({ error: `unknown roles: ${missing.join(", ")}` });
+    }
+
+    const nextRoleNames = new Set(roleNames);
+    const isRemovingAdmin = user.roles.some((entry) => entry.role.name === "admin") && !nextRoleNames.has("admin");
+    if (isRemovingAdmin) {
+      const hasOtherCredentialedAdmin = await UserStore.hasCredentialedAdminExcludingEmail(user.emailNormalized);
+      if (!hasOtherCredentialedAdmin) {
+        return reply.status(400).send({ error: "cannot remove the last credentialed admin" });
+      }
+    }
+
+    await RoleStore.replaceUserRoles(
+      user.id,
+      roles.map((role) => role.id)
+    );
+
+    const updatedUser = await UserStore.findById(user.id);
+    return {
+      user: {
+        id: updatedUser?.id ?? user.id,
+        email: updatedUser?.email ?? user.email,
+        roles: (updatedUser?.roles ?? user.roles).map((entry) => entry.role.name),
+      },
+    };
+  });
+
+  app.post("/auth/roles", async (request, reply) => {
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const body = request.body as { name?: unknown; description?: unknown; permissionCodes?: unknown } | undefined;
+    const roleName = parseRoleName(body?.name);
+    if (!roleName) {
+      return reply.status(400).send({ error: "valid role name is required" });
+    }
+
+    const description = typeof body?.description === "string" ? body.description.trim() : undefined;
+    const role = await RoleStore.ensureRole(roleName, description);
+
+    if (body?.permissionCodes !== undefined) {
+      const permissionCodes = parseStringArray(body.permissionCodes);
+      if (!permissionCodes) {
+        return reply.status(400).send({ error: "permissionCodes must be an array of strings" });
+      }
+
+      const permissions = await RoleStore.listPermissions();
+      const permissionByCode = new Map(permissions.map((permission) => [permission.code, permission.id]));
+      const missingCodes = permissionCodes.filter((code) => !permissionByCode.has(code));
+      if (missingCodes.length > 0) {
+        return reply.status(400).send({ error: `unknown permissions: ${missingCodes.join(", ")}` });
+      }
+
+      await RoleStore.replaceRolePermissions(
+        role.id,
+        permissionCodes.map((code) => permissionByCode.get(code) as string)
+      );
+    }
+
+    const roles = await RoleStore.listRolesWithPermissions();
+    return {
+      role: roles.find((entry) => entry.name === role.name) ?? {
+        id: role.id,
+        name: role.name,
+        description: role.description,
+        usersCount: 0,
+        permissions: [],
+      },
+    };
+  });
+
+  app.post("/auth/roles/:roleName/permissions", async (request, reply) => {
+    const authResult = await requireAdminSession(request.headers.authorization);
+    if (authResult.error) {
+      return reply.status(authResult.error.status).send(authResult.error.body);
+    }
+
+    const roleName = parseRoleName((request.params as { roleName?: unknown } | undefined)?.roleName);
+    if (!roleName) {
+      return reply.status(400).send({ error: "valid roleName is required" });
+    }
+
+    const body = request.body as { permissionCodes?: unknown } | undefined;
+    const permissionCodes = parseStringArray(body?.permissionCodes);
+    if (!permissionCodes) {
+      return reply.status(400).send({ error: "permissionCodes must be an array of strings" });
+    }
+
+    const roles = await RoleStore.findRolesByNames([roleName]);
+    const role = roles[0];
+    if (!role) {
+      return reply.status(404).send({ error: "role not found" });
+    }
+
+    const permissions = await RoleStore.listPermissions();
+    const permissionByCode = new Map(permissions.map((permission) => [permission.code, permission.id]));
+    const missingCodes = permissionCodes.filter((code) => !permissionByCode.has(code));
+    if (missingCodes.length > 0) {
+      return reply.status(400).send({ error: `unknown permissions: ${missingCodes.join(", ")}` });
+    }
+
+    await RoleStore.replaceRolePermissions(
+      role.id,
+      permissionCodes.map((code) => permissionByCode.get(code) as string)
+    );
+
+    const refreshedRoles = await RoleStore.listRolesWithPermissions();
+    return {
+      role: refreshedRoles.find((entry) => entry.name === role.name) ?? null,
+    };
   });
 
   app.post("/auth/set-password", async (request, reply) => {
